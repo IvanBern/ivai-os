@@ -136,19 +136,26 @@ func main() {
 					payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
 				}
 
-				// 4. Send to DeepSeek
-				response, err := gateway.GenerateText(context.Background(), payload, "deepseek-chat")
+				// 4. Send to DeepSeek (Passing nil for tools for now)
+				responseMsg, err := gateway.Chat(context.Background(), payload, nil, "deepseek-chat")
 				if err != nil {
 					slog.Error("LLM Execution Failed", "error", err)
 					fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
 					return
 				}
 
-				// 5. Save Ivai's response to memory
-				dbStore.SaveMessage("assistant", response)
+				// 5. Check if it's a standard text response
+				if len(responseMsg.ToolCalls) == 0 {
+					// Standard text response
+					dbStore.SaveMessage("assistant", responseMsg.Content)
 
-				// Print it nicely to the CLI
-				fmt.Printf("\n[Ivai] %s\nIvai > ", response)
+					// Print it nicely to the CLI
+					fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
+				} else {
+					// We will handle tool execution here next!
+					slog.Info("LLM requested a tool execution!", "tool_calls", responseMsg.ToolCalls)
+					fmt.Printf("\n[Ivai System] Thinking... Executing Tool: %s\nIvai > ", responseMsg.ToolCalls[0].Function.Name)
+				}
 			}(task)
 
 		case <-ctx.Done():
