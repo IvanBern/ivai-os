@@ -1,21 +1,34 @@
-.PHONY: build run tidy clean
+# Variables
+BINARY_NAME=ivai-os-linux
+MAIN_PATH=cmd/ivai/main.go
+VM_TARGET=ivai-os-linux@orb
+BIN_DEST=/usr/local/bin/ivai-os
 
-# Build the Ivai OS binary
-build:
-	@echo "Building Ivai OS..."
-	go build -o bin/ivai cmd/ivai/main.go
+.PHONY: tidy build deploy run clean dev
 
-# Run the Ivai OS
-run:
-	@echo "Starting Ivai OS..."
-	go run cmd/ivai/main.go
-
-# Tidy up Go modules
 tidy:
-	@echo "Tidying Go modules..."
 	go mod tidy
 
-# Clean build artifacts
+# 1. Compile for the Debian VM
+build:
+	@echo "🔨 Cross-compiling for Linux ARM64..."
+	GOOS=linux GOARCH=arm64 go build -o $(BINARY_NAME) $(MAIN_PATH)
+
+# 2. Build, push, and set permissions in one shot
+deploy: build
+	@echo "🚀 Shipping binary to Debian VM..."
+	scp $(BINARY_NAME) $(VM_TARGET):~/
+	@echo "🔒 Securing binary..."
+	ssh $(VM_TARGET) "sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo chown ivai:ivai $(BIN_DEST) && sudo chmod +x $(BIN_DEST)"
+	@echo "✅ Deployment complete!"
+
+# 3. Run the OS securely inside the VM
+run:
+	@echo "🧠 Waking up Ivai OS..."
+	ssh -t $(VM_TARGET) "sudo -u ivai $(BIN_DEST)"
+
+# 4. Do it all (Build -> Deploy -> Run)
+dev: deploy run
+
 clean:
-	@echo "Cleaning up..."
-	rm -rf bin/
+	rm -f $(BINARY_NAME)

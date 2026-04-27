@@ -21,17 +21,9 @@ make run
 
 ## Transfer and Run on OrbStack
 
-If you generated this on your macOS file system, the beauty of Go is that you can just compile it for your Debian VM directly from your Mac.
+If you generated this on your macOS file system, the beauty of Go is that you can just compile it for your Debian VM directly from your Mac. We have fully automated this pipeline in the `Makefile`.
 
-### Step 1: Build the Linux Binary
-
-To build the Linux binary right there on your Mac:
-
-```bash
-GOOS=linux GOARCH=arm64 go build -o ivai-os-linux cmd/ivai/main.go
-```
-
-### Step 2: Create a Dedicated Service User
+### Step 1: Create a Dedicated Service User (One-Time Setup)
 
 Inside your OrbStack VM, create a restricted system user to run the OS securely:
 
@@ -39,25 +31,21 @@ Inside your OrbStack VM, create a restricted system user to run the OS securely:
 sudo adduser --system --group ivai
 ```
 
-### Step 3: Install the Binary
+### Step 2: Deploy and Run
 
-Move the compiled `ivai-os-linux` binary into your VM's system binaries path and set the correct ownership and permissions:
-
-```bash
-sudo mv ivai-os-linux /usr/local/bin/ivai-os
-sudo chown ivai:ivai /usr/local/bin/ivai-os
-sudo chmod +x /usr/local/bin/ivai-os
-```
-
-### Step 4: Run the Core Engine
-
-You can now start the AI Operating System securely under its restricted user account.
+From your Mac terminal (in the project directory), run the "one-click" deployment command:
 
 ```bash
-sudo -u ivai /usr/local/bin/ivai-os
+make dev
 ```
 
-Because it was cross-compiled with `GOOS=linux` and `GOARCH=arm64`, and uses pure-Go libraries for its database and Wasm sandbox, it will start up instantly with zero external dependencies, completely isolated from your Mac host. You should see logs indicating a successful startup:
+Here is what happens automatically:
+1. Your Mac cross-compiles the new ARM64 binary (`ivai-os-linux`).
+2. It pushes the binary to OrbStack via SCP.
+3. It moves the binary to `/usr/local/bin/`, sets the `ivai` user ownership, and makes it executable.
+4. It instantly starts the OS and streams the JSON logs right back to your Mac terminal.
+
+You should see logs indicating a successful startup:
 
 ```json
 {"time":"2026-04-27T21:59:42.49773692+04:00","level":"INFO","msg":"Ivai OS starting up...","version":"0.1.0"}
