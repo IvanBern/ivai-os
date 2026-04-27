@@ -31,7 +31,18 @@ Inside your OrbStack VM, create a restricted system user to run the OS securely:
 sudo adduser --system --group ivai
 ```
 
-### Step 2: Deploy and Run
+### Step 2: Configure Environment Variables
+
+Create a secure directory for the OS configuration and add your `DEEPSEEK_API_KEY`:
+
+```bash
+sudo mkdir -p /etc/ivai
+echo 'DEEPSEEK_API_KEY="your-api-key-here"' | sudo tee /etc/ivai/.env
+sudo chown -R ivai:ivai /etc/ivai
+sudo chmod 600 /etc/ivai/.env
+```
+
+### Step 3: Deploy and Run
 
 From your Mac terminal (in the project directory), run the "one-click" deployment command:
 

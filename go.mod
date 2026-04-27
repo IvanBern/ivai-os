@@ -3,6 +3,7 @@ module github.com/IvanBern/ivai-os
 go 1.26.2
 
 require (
+	github.com/joho/godotenv v1.5.1
 	github.com/tetratelabs/wazero v1.11.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
