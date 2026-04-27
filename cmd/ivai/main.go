@@ -16,6 +16,7 @@ import (
 	"github.com/IvanBern/ivai-os/internal/llm"
 	"github.com/IvanBern/ivai-os/internal/memory"
 	"github.com/IvanBern/ivai-os/internal/sandbox"
+	"github.com/IvanBern/ivai-os/internal/tools"
 	"github.com/joho/godotenv"
 )
 
@@ -120,42 +121,126 @@ func main() {
 		case task := <-taskChan:
 			// Process tasks asynchronously
 			go func(t string) {
-				// 1. Save user prompt to memory
-				dbStore.SaveMessage("user", t)
+				// 1. Define the tools available to Ivai
+				availableTools := []llm.Tool{
+					{
+						Type: "function",
+						Function: llm.FunctionDefinition{
+							Name:        "read_file",
+							Description: "Reads the contents of a file at the given path on the local filesystem.",
+							Parameters: map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"filepath": map[string]interface{}{"type": "string"},
+								},
+								"required": []string{"filepath"},
+							},
+						},
+					},
+					{
+						Type: "function",
+						Function: llm.FunctionDefinition{
+							Name:        "write_file",
+							Description: "Writes text content to a file at the given path, overwriting it if it exists.",
+							Parameters: map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"filepath": map[string]interface{}{"type": "string"},
+									"content":  map[string]interface{}{"type": "string"},
+								},
+								"required": []string{"filepath", "content"},
+							},
+						},
+					},
+				}
 
-				// 2. Retrieve recent history (e.g., last 10 messages)
+				// 2. Save user prompt to memory
+				dbStore.SaveMessage("user", t)
 				history, _ := dbStore.GetRecentMessages(10)
 
-				// 3. Construct the payload: System Directive + History
+				// 3. Construct the payload
 				var payload []llm.Message
 				payload = append(payload, llm.Message{
 					Role:    "system",
-					Content: "You are Ivai, an advanced AI Operating System. You have a continuous memory. Be concise.",
+					Content: "You are Ivai, an advanced AI Operating System. You have a continuous memory and access to the local filesystem.",
 				})
 				for _, msg := range history {
 					payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
 				}
 
-				// 4. Send to DeepSeek (Passing nil for tools for now)
-				responseMsg, err := gateway.Chat(context.Background(), payload, nil, "deepseek-chat")
+				// 4. Send to DeepSeek (Now passing availableTools!)
+				responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-chat")
 				if err != nil {
 					slog.Error("LLM Execution Failed", "error", err)
 					fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
 					return
 				}
 
-				// 5. Check if it's a standard text response
-				if len(responseMsg.ToolCalls) == 0 {
-					// Standard text response
-					dbStore.SaveMessage("assistant", responseMsg.Content)
+				// 5. Handle Tool Executions
+				if len(responseMsg.ToolCalls) > 0 {
+					// The LLM wants to take an action!
+					fmt.Printf("\n[Ivai System] Thinking...\n")
 
-					// Print it nicely to the CLI
-					fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
-				} else {
-					// We will handle tool execution here next!
-					slog.Info("LLM requested a tool execution!", "tool_calls", responseMsg.ToolCalls)
-					fmt.Printf("\n[Ivai System] Thinking... Executing Tool: %s\nIvai > ", responseMsg.ToolCalls[0].Function.Name)
+					// Append the assistant's tool call request to the message history so the API knows what we are responding to
+					payload = append(payload, responseMsg)
+
+					for _, toolCall := range responseMsg.ToolCalls {
+						slog.Info("Executing tool", "name", toolCall.Function.Name)
+						fmt.Printf("[Ivai Tool] Running: %s\n", toolCall.Function.Name)
+
+						var toolResult string
+
+						// Route the tool call to the correct Go function
+						if toolCall.Function.Name == "read_file" {
+							var args struct {
+								Filepath string `json:"filepath"`
+							}
+							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+
+							content, err := tools.ReadFile(args.Filepath)
+							if err != nil {
+								toolResult = fmt.Sprintf("Error reading file: %v", err)
+							} else {
+								toolResult = content
+							}
+						} else if toolCall.Function.Name == "write_file" {
+							var args struct {
+								Filepath string `json:"filepath"`
+								Content  string `json:"content"`
+							}
+							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+
+							err := tools.WriteFile(args.Filepath, args.Content)
+							if err != nil {
+								toolResult = fmt.Sprintf("Error writing file: %v", err)
+							} else {
+								toolResult = "File written successfully."
+							}
+						}
+
+						// Append the result of the tool execution as a "tool" role message
+						payload = append(payload, llm.Message{
+							Role:       "tool",
+							Content:    toolResult,
+							ToolCallID: toolCall.ID,
+						})
+					}
+
+					// 6. Send the tool results back to the LLM to get the final conversational answer
+					finalResponseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-chat")
+					if err != nil {
+						slog.Error("LLM Final Response Failed", "error", err)
+						return
+					}
+
+					// Overwrite our responseMsg with the final answer
+					responseMsg = finalResponseMsg
 				}
+
+				// 7. Save the final textual response to memory and print it
+				dbStore.SaveMessage("assistant", responseMsg.Content)
+				fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
+
 			}(task)
 
 		case <-ctx.Done():
