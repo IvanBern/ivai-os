@@ -1,47 +1,60 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
-// WasmRuntime provides a secure environment for executing untrusted code.
-type WasmRuntime struct {
-	runtime wazero.Runtime
+// WasmRuntime manages the sandboxed execution of code plugins
+type WasmRuntime struct{}
+
+// NewWasmRuntime initializes the sandbox manager
+func NewWasmRuntime() *WasmRuntime {
+	return &WasmRuntime{}
 }
 
-// NewWasmRuntime initializes the wazero runtime.
-func NewWasmRuntime(ctx context.Context) (*WasmRuntime, error) {
-	r := wazero.NewRuntime(ctx)
-	// Additional configuration like WASI could be added here.
-	return &WasmRuntime{runtime: r}, nil
-}
-
-// ExecutePlugin runs a WASM binary with a specific payload.
-// It uses a strict timeout to ensure the sandbox doesn't hang the OS.
-func (wr *WasmRuntime) ExecutePlugin(ctx context.Context, wasmBytes []byte, payload string) (string, error) {
-	// Enforce a strict millisecond timeout for execution
-	timeoutCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+// Execute runs a compiled WebAssembly binary with strict timeouts and standard I/O.
+// - wasmBytes: The compiled .wasm file loaded into memory.
+// - payload: The input string passed to the plugin via standard input (stdin).
+// - timeoutMs: Maximum execution time in milliseconds.
+func (w *WasmRuntime) Execute(ctx context.Context, wasmBytes []byte, payload string, timeoutMs int) (string, error) {
+	// 1. Enforce a strict execution timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 
-	// Boilerplate for loading and executing a module
-	code, err := wr.runtime.CompileModule(timeoutCtx, wasmBytes)
+	// 2. Initialize the Wazero runtime
+	r := wazero.NewRuntime(timeoutCtx)
+	// r.Close automatically cleans up all resources and memory used by this runtime
+	defer r.Close(timeoutCtx)
+
+	// 3. Instantiate the WASI subsystem (required for stdin/stdout/stderr)
+	wasi_snapshot_preview1.MustInstantiate(timeoutCtx, r)
+
+	// 4. Setup sandboxed I/O buffers
+	var outBuf, errBuf bytes.Buffer
+	config := wazero.NewModuleConfig().
+		WithStdin(bytes.NewReader([]byte(payload))). // Inject the payload as stdin
+		WithStdout(&outBuf).                         // Capture stdout as the result
+		WithStderr(&errBuf)                          // Capture stderr for debugging
+
+	// 5. Compile and execute the Wasm module
+	// InstantiateWithConfig automatically calls the `_start` function for WASI modules
+	_, err := r.InstantiateWithConfig(timeoutCtx, wasmBytes, config)
+
 	if err != nil {
-		return "", fmt.Errorf("failed to compile module: %w", err)
+		// Check if the sandbox was killed due to our timeout
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("sandbox killed: execution timed out after %d ms", timeoutMs)
+		}
+		// Otherwise, it was a crash or logic error inside the plugin
+		return "", fmt.Errorf("plugin execution failed: %v\nstderr: %s", err, errBuf.String())
 	}
 
-	// In a real implementation, you would instantiate the module, 
-	// set up memory for the payload, and call the exported function.
-	fmt.Printf("Executing plugin with payload: %s\n", payload)
-	_ = code // Use the compiled code
-
-	return "Plugin execution placeholder result", nil
-}
-
-// Close cleans up the runtime resources.
-func (wr *WasmRuntime) Close(ctx context.Context) error {
-	return wr.runtime.Close(ctx)
+	// 6. Return the captured standard output
+	return outBuf.String(), nil
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/IvanBern/ivai-os/internal/llm"
 	"github.com/IvanBern/ivai-os/internal/memory"
+	"github.com/IvanBern/ivai-os/internal/sandbox"
 	"github.com/joho/godotenv"
 )
 
@@ -104,6 +105,12 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("Memory database mounted successfully")
+
+	// Initialize the Wasm Execution Sandbox
+	slog.Info("Initializing Wazero execution sandbox...")
+	wasmEngine := sandbox.NewWasmRuntime()
+	_ = wasmEngine // Placeholder for future use when we implement plugin execution
+	slog.Info("Execution sandbox ready with strict millisecond timeouts")
 
 	slog.Info("Ivai OS is now running. Awaiting input via CLI or port 8080.")
 
