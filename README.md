@@ -63,3 +63,32 @@ You should see logs indicating a successful startup:
 {"time":"2026-04-27T21:59:42.498021755+04:00","level":"INFO","msg":"Initializing core subsystems..."}
 {"time":"2026-04-27T21:59:42.498032672+04:00","level":"INFO","msg":"Ivai OS is now running. Press Ctrl+C to shut down."}
 ```
+
+## Interacting with Ivai OS
+
+Ivai OS supports a dual-interface architecture, running concurrently:
+1. **Interactive CLI**: Type commands directly into the terminal prompt.
+2. **HTTP API**: Send JSON payloads to a background listener on port 8080.
+
+### Using the CLI
+
+When running `make dev`, after the initial logs, you will see an interactive prompt:
+
+```plaintext
+Ivai > Hello, who are you?
+```
+
+Type your instruction and press Enter. The task will be sent to the central processing channel.
+
+### Using the HTTP API
+
+You can also send tasks to the OS via HTTP POST requests from another terminal. For example, if you SSH into the VM:
+
+```bash
+ssh ivai-os-linux@orb
+curl -X POST http://localhost:8080/api/task \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "Write a python script to calculate fibonacci"}'
+```
+
+The API will return `{"status": "task accepted"}` and the core engine will log the new task.

@@ -1,55 +1,111 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 )
 
-// Ivai OS Entry Point
+// Task payload structure for the HTTP server
+type TaskRequest struct {
+	Instruction string `json:"instruction"`
+}
+
 func main() {
-	// Initialize structured logging using slog
+	// 1. Initialize Logger & Config
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
-
 	slog.Info("Ivai OS starting up...", "version", "0.1.0")
 
-	// Attempt to load the secure configuration file
-	if err := godotenv.Load("/etc/ivai/.env"); err != nil {
-		slog.Warn("No /etc/ivai/.env file found, falling back to system environment variables")
-	} else {
+	if err := godotenv.Load("/etc/ivai/.env"); err == nil {
 		slog.Info("Configuration loaded successfully from /etc/ivai/.env")
 	}
 
-	// Verify the key is loaded (we only log the first few characters for security)
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if len(apiKey) > 5 {
-		slog.Info("DeepSeek API Key detected", "key_prefix", apiKey[:5]+"...")
-	} else {
-		slog.Error("DeepSeek API Key is missing or invalid!")
-	}
-
-	// Context for graceful shutdown
+	// 2. Setup Context and Channels
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	slog.Info("Initializing core subsystems...")
+	// This channel is Ivai's "ear". Both CLI and HTTP will send tasks here.
+	taskChan := make(chan string, 10)
 
-	// Main OS Loop
-	slog.Info("Ivai OS is now running. Press Ctrl+C to shut down.")
+	// 3. Start the HTTP Server (Background Goroutine)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/task", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req TaskRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
 
-	select {
-	case <-ctx.Done():
-		slog.Info("Shutting down Ivai OS...")
+		// Send task to the central channel
+		taskChan <- req.Instruction
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"status": "task accepted"})
+	})
 
-		slog.Info("Ivai OS gracefully stopped.", "timeout", shutdownCtx)
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		slog.Info("HTTP Server listening on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("HTTP server error", "err", err)
+		}
+	}()
+
+	// 4. Start the CLI REPL (Background Goroutine)
+	go func() {
+		// Small delay so the prompt appears after initialization logs
+		time.Sleep(100 * time.Millisecond)
+		scanner := bufio.NewScanner(os.Stdin)
+		fmt.Print("\nIvai > ")
+		for scanner.Scan() {
+			input := strings.TrimSpace(scanner.Text())
+			if input != "" {
+				taskChan <- input // Send task to the central channel
+			}
+			// Wait a moment for logs to print before re-prompting
+			time.Sleep(50 * time.Millisecond)
+			fmt.Print("Ivai > ")
+		}
+	}()
+
+	slog.Info("Ivai OS is now running. Awaiting input via CLI or port 8080.")
+
+	// 5. The Main OS Event Loop
+	for {
+		select {
+		case task := <-taskChan:
+			slog.Info("New task received", "task", task)
+			// TODO: Pass this task to the DeepSeek Gateway for processing!
+
+		case <-ctx.Done():
+			slog.Info("Shutting down Ivai OS...")
+
+			// Gracefully shutdown the HTTP server
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			server.Shutdown(shutdownCtx)
+
+			slog.Info("Ivai OS gracefully stopped.")
+			return
+		}
 	}
 }
