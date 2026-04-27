@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IvanBern/ivai-os/internal/llm"
 	"github.com/joho/godotenv"
 )
 
@@ -87,6 +88,13 @@ func main() {
 		}
 	}()
 
+	// Initialize the LLM Gateway
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		slog.Warn("DEEPSEEK_API_KEY is not set. LLM execution will fail.")
+	}
+	gateway := llm.NewGateway(apiKey)
+
 	slog.Info("Ivai OS is now running. Awaiting input via CLI or port 8080.")
 
 	// 5. The Main OS Event Loop
@@ -94,7 +102,23 @@ func main() {
 		select {
 		case task := <-taskChan:
 			slog.Info("New task received", "task", task)
-			// TODO: Pass this task to the DeepSeek Gateway for processing!
+
+			// Process tasks asynchronously so we don't block the UI/HTTP server
+			go func(t string) {
+				// We use deepseek-v4-flash as the default for reasoning/chat routing
+				response, err := gateway.GenerateText(context.Background(), t, "deepseek-v4-flash")
+				if err != nil {
+					slog.Error("LLM Execution Failed", "error", err)
+					fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
+					return
+				}
+
+				// Log it for observability
+				slog.Info("Task completed", "response_length", len(response))
+
+				// Print it nicely to the CLI
+				fmt.Printf("\n[Ivai] %s\nIvai > ", response)
+			}(task)
 
 		case <-ctx.Done():
 			slog.Info("Shutting down Ivai OS...")
@@ -102,7 +126,9 @@ func main() {
 			// Gracefully shutdown the HTTP server
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			server.Shutdown(shutdownCtx)
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				slog.Error("HTTP server shutdown error", "err", err)
+			}
 
 			slog.Info("Ivai OS gracefully stopped.")
 			return
