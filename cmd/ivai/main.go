@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/IvanBern/ivai-os/internal/llm"
+	"github.com/IvanBern/ivai-os/internal/memory"
 	"github.com/joho/godotenv"
 )
 
@@ -95,26 +96,49 @@ func main() {
 	}
 	gateway := llm.NewGateway(apiKey)
 
+	// Initialize the Persistent Memory Subsystem
+	slog.Info("Mounting persistent memory subsystem...")
+	dbStore, err := memory.NewStore("/etc/ivai/memory.db")
+	if err != nil {
+		slog.Error("Failed to initialize memory database", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Memory database mounted successfully")
+
 	slog.Info("Ivai OS is now running. Awaiting input via CLI or port 8080.")
 
 	// 5. The Main OS Event Loop
 	for {
 		select {
 		case task := <-taskChan:
-			slog.Info("New task received", "task", task)
-
-			// Process tasks asynchronously so we don't block the UI/HTTP server
+			// Process tasks asynchronously
 			go func(t string) {
-				// We use deepseek-v4-flash as the default for reasoning/chat routing
-				response, err := gateway.GenerateText(context.Background(), t, "deepseek-v4-flash")
+				// 1. Save user prompt to memory
+				dbStore.SaveMessage("user", t)
+
+				// 2. Retrieve recent history (e.g., last 10 messages)
+				history, _ := dbStore.GetRecentMessages(10)
+
+				// 3. Construct the payload: System Directive + History
+				var payload []llm.Message
+				payload = append(payload, llm.Message{
+					Role:    "system",
+					Content: "You are Ivai, an advanced AI Operating System. You have a continuous memory. Be concise.",
+				})
+				for _, msg := range history {
+					payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
+				}
+
+				// 4. Send to DeepSeek
+				response, err := gateway.GenerateText(context.Background(), payload, "deepseek-chat")
 				if err != nil {
 					slog.Error("LLM Execution Failed", "error", err)
 					fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
 					return
 				}
 
-				// Log it for observability
-				slog.Info("Task completed", "response_length", len(response))
+				// 5. Save Ivai's response to memory
+				dbStore.SaveMessage("assistant", response)
 
 				// Print it nicely to the CLI
 				fmt.Printf("\n[Ivai] %s\nIvai > ", response)

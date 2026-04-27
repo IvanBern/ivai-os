@@ -16,9 +16,14 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
 }
 
 type chatResponse struct {
@@ -45,14 +50,11 @@ func NewGateway(apiKey string) *Gateway {
 	}
 }
 
-// GenerateText sends the prompt to the DeepSeek API
-func (g *Gateway) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
+// GenerateText sends the full conversation history to the DeepSeek API
+func (g *Gateway) GenerateText(ctx context.Context, messages []Message, model string) (string, error) {
 	reqBody := chatRequest{
-		Model: model,
-		Messages: []chatMessage{
-			{Role: "system", Content: "You are Ivai, an advanced AI Operating System. Be concise and precise."},
-			{Role: "user", Content: prompt},
-		},
+		Model:    model,
+		Messages: messages, // Now passes the full history!
 	}
 
 	jsonData, err := json.Marshal(reqBody)
