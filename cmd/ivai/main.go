@@ -152,6 +152,20 @@ func main() {
 							},
 						},
 					},
+					{
+						Type: "function",
+						Function: llm.FunctionDefinition{
+							Name:        "execute_command",
+							Description: "Executes a bash shell command on the host Debian system and returns the output.",
+							Parameters: map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"command": map[string]interface{}{"type": "string"},
+								},
+								"required": []string{"command"},
+							},
+						},
+					},
 				}
 
 				// 2. Save user prompt to memory
@@ -215,6 +229,18 @@ func main() {
 								toolResult = fmt.Sprintf("Error writing file: %v", err)
 							} else {
 								toolResult = "File written successfully."
+							}
+						} else if toolCall.Function.Name == "execute_command" {
+							var args struct {
+								Command string `json:"command"`
+							}
+							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+
+							output, err := tools.ExecuteCommand(args.Command)
+							if err != nil {
+								toolResult = fmt.Sprintf("Command execution failed: %v", err)
+							} else {
+								toolResult = output
 							}
 						}
 
