@@ -35,7 +35,7 @@ deploy: build
 	@echo "✅ Deployment complete!"
 
 # 2.5 Deploy systemd service
-service:
+service: deploy
 	@echo "📝 Deploying systemd service..."
 	scp ivai.service $(VM_TARGET):~/
 	ssh $(VM_TARGET) "sudo mv ~/ivai.service /etc/systemd/system/ivai.service && sudo systemctl daemon-reload && sudo systemctl enable ivai && sudo systemctl restart ivai"

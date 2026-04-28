@@ -16,7 +16,7 @@
 - [x] **Persistent Workspace**: Define a standard "Ivai Home" directory for the agent to manage its own projects and persistent data.
 
 ## 🛠 Phase 4: Advanced Tooling & Autonomy
-- [ ] **Git Integration**: Teach Ivai to use `git` so it can clone repositories, manage branches, and commit code autonomously.
+- [x] **Git Integration**: Teach Ivai to use `git` so it can clone repositories, manage branches, and commit code autonomously.
 - [ ] **GitHub API Access**: Allow Ivai to read PRs, issues, and repository metadata to analyze and contribute to external codebases.
-- [ ] **Network Tooling**: Add tools for safe HTTP requests and network diagnostics.
+- [x] **Network Tooling**: Add tools for safe HTTP requests and network diagnostics.
 - [ ] **Sub-Agent Spawning**: Enable Ivai to spawn child processes or sandboxed "sub-agents" for parallel task execution.

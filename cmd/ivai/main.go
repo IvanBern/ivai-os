@@ -181,6 +181,23 @@ func main() {
 							},
 						},
 					},
+					{
+						Type: "function",
+						Function: llm.FunctionDefinition{
+							Name:        "http_request",
+							Description: "Performs an HTTP request (GET, POST, etc.) and returns the response body.",
+							Parameters: map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"method":  map[string]interface{}{"type": "string", "description": "HTTP method (e.g., GET, POST)"},
+									"url":     map[string]interface{}{"type": "string", "description": "Target URL"},
+									"body":    map[string]interface{}{"type": "string", "description": "Request body (optional)"},
+									"headers": map[string]interface{}{"type": "object", "description": "HTTP headers (optional)"},
+								},
+								"required": []string{"method", "url"},
+							},
+						},
+					},
 				}
 
 				// 2. Save user prompt to memory
@@ -189,7 +206,7 @@ func main() {
 
 				// 3. Construct the payload
 				homeDir, _ := os.UserHomeDir()
-				systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your persistent workspace is %s. You have a continuous memory and access to the local filesystem. Use your workspace for projects and data storage.", homeDir)
+				systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your persistent workspace is %s. You have a continuous memory and access to the local filesystem. Use your workspace for projects and data storage. You have 'git' installed and configured for version control. You also have an 'http_request' tool for network access.", homeDir)
 
 				var payload []llm.Message
 				payload = append(payload, llm.Message{
@@ -266,6 +283,16 @@ func main() {
 								output, err := wasmEngine.Execute(context.Background(), wasmBytes, args.Payload, args.TimeoutMs)
 								if err != nil { toolResult = fmt.Sprintf("Sandbox error: %v", err) } else { toolResult = output }
 							}
+						} else if toolCall.Function.Name == "http_request" {
+							var args struct {
+								Method  string            `json:"method"`
+								URL     string            `json:"url"`
+								Body    string            `json:"body"`
+								Headers map[string]string `json:"headers"`
+							}
+							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+							output, err := tools.HttpRequest(args.Method, args.URL, args.Body, args.Headers)
+							if err != nil { toolResult = fmt.Sprintf("HTTP error: %v", err) } else { toolResult = output }
 						}
 
 						// Append the tool result to the payload so the LLM can read it in the next loop iteration
