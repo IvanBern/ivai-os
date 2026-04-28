@@ -14,12 +14,13 @@ Ivai OS has successfully moved from a scaffold to a complete, production-ready a
 
 ## 🏗 Architecture Overview
 
-- **`cmd/ivai/main.go`**: The "Kernel" and Event Loop. Orchestrates the dual-interface input, reasoning loop, and tool routing.
-- **`internal/llm/`**: DeepSeek-powered reasoning engine with tool-calling schema support and robust JSON serialization.
-- **`internal/sandbox/`**: Secure WebAssembly execution environment using Wazero. Implements strict timeouts and WASI Preview 1.
-- **`internal/memory/`**: Persistent storage using pure-Go SQLite (`modernc.org/sqlite`). Handles message history and state.
-- **`internal/tools/`**: System-level integration for file I/O and shell command execution.
-- **`Makefile`**: Advanced cross-compilation pipeline for ARM64 Linux and automated deployment to OrbStack VMs.
+Ivai OS follows a modular kernel-and-subsystem design. For a deep dive into the internal specifications, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+- **The Kernel**: A Go-based event loop orchestrating reasoning and tool routing.
+- **Cognitive Engine**: DeepSeek-powered tool calling with autonomous multi-step reasoning.
+- **Execution Sandbox**: Secure WebAssembly (Wazero) micro-VM for untrusted code.
+- **Memory Subsystem**: Persistent SQLite storage for long-term context.
+- **Mac Client**: Remote control via the `ivaictl` CLI.
 
 ## ⚙️ Getting Started
 

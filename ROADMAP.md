@@ -6,17 +6,39 @@
 - [x] Setup structured logging and graceful shutdown signals.
 
 ## ✅ Phase 2: System Capabilities
-- [x] **The Memory Subsystem**: Embedded SQLite database for persistent conversation history and task context.
-- [x] **The Execution Sandbox**: Secure Wazero WebAssembly runtime for isolated plugin execution.
-- [x] **The Agentic Tool Protocol**: Multi-step reasoning loop with support for `read_file`, `write_file`, `execute_command`, and `execute_wasm`.
+- [x] **The Memory Subsystem**: Embedded SQLite database for persistent conversation history.
+- [x] **The Execution Sandbox**: Secure Wazero WebAssembly runtime for isolated execution.
+- [x] **The Agentic Tool Protocol**: Multi-step reasoning loop with `read_file`, `write_file`, `execute_command`, and `execute_wasm`.
 
-## 🚀 Phase 3: Residency & Advanced Interaction
-- [x] **The Daemon (Systemd)**: Implement a systemd service unit to make Ivai OS a permanent resident of the Debian VM. It will start automatically on boot and restart on failure.
-- [x] **The Mac Client**: Develop a native macOS CLI (or web interface) that communicates with Ivai via the HTTP port 8080. This removes the need for SSH to assign tasks.
-- [x] **Persistent Workspace**: Define a standard "Ivai Home" directory for the agent to manage its own projects and persistent data.
+## ✅ Phase 3: Residency & Mac Integration
+- [x] **The Daemon (Systemd)**: Background residency with auto-restart and journaled logging.
+- [x] **The Mac Client (ivaictl)**: Native macOS CLI for remote task assignment via HTTP.
+- [x] **Persistent Workspace**: Standardized `/home/ivai` directory for agent projects.
 
-## 🛠 Phase 4: Advanced Tooling & Autonomy
-- [x] **Git Integration**: Teach Ivai to use `git` so it can clone repositories, manage branches, and commit code autonomously.
-- [ ] **GitHub API Access**: Allow Ivai to read PRs, issues, and repository metadata to analyze and contribute to external codebases.
-- [x] **Network Tooling**: Add tools for safe HTTP requests and network diagnostics.
-- [ ] **Sub-Agent Spawning**: Enable Ivai to spawn child processes or sandboxed "sub-agents" for parallel task execution.
+## ✅ Phase 4: Advanced Tooling
+- [x] **Git Integration**: Version control for autonomous code management.
+- [x] **Network Tooling**: Native `http_request` tool for external API interaction.
+
+---
+
+## 🛡️ Phase 5: Production Hardening (Next)
+
+### 1. API Security (The HTTP Layer)
+- [ ] **Authentication Middleware**: Implement API Key validation for the HTTP router.
+- [ ] **mTLS**: Enforce mutual TLS for cryptographically secure Mac-to-VM communication.
+
+### 2. Advanced Sandboxing (The OS Layer)
+- [ ] **Directory Whitelisting**: Restrict File I/O tools to specific workspace boundaries.
+- [ ] **cgroups (Control Groups)**: Enforce strict CPU and RAM limits via systemd to prevent resource exhaustion.
+- [ ] **Egress Filtering**: Use `iptables` to block unauthorized outbound network requests.
+
+## 🧠 Phase 6: Long-Term Intelligence
+- [ ] **Vector Database**: Integrate an embedded vector store (e.g., Chroma/Milvus) for semantic memory.
+- [ ] **RAG Pipeline**: Implement Retrieval-Augmented Generation to search past solutions before querying the LLM.
+
+## 🤖 Phase 7: Self-Evolution
+- [ ] **GitHub Ops**: Tools for `git_clone`, `git_commit`, and opening Pull Requests.
+- [ ] **Self-Modification Loop**: Enable Ivai to branch its own source code, implement features, and submit PRs for human review.
+
+## 📊 Phase 8: Observability
+- [ ] **OpenTelemetry (OTel)**: Instrument the daemon with spans for visual waterfall charts of reasoning and tool execution.
