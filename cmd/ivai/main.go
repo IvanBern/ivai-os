@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -104,13 +103,8 @@ func main() {
 	}
 
 	go func() {
-		ln, err := net.Listen("tcp", ":"+port)
-		if err != nil {
-			slog.Error("HTTP server failed to bind", "port", port, "err", err)
-			return
-		}
 		slog.Info("HTTP Server listening", "port", port)
-		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "err", err)
 		}
 	}()
@@ -292,7 +286,7 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 	}
 
 	// 2. Save user prompt to memory
-	dbStore.SaveMessage("user", t)
+	dbStore.SaveMessage("user", t, "")
 	history, _ := dbStore.GetRecentMessages(10)
 
 	// 3. Construct the payload
@@ -306,7 +300,11 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 		Content: systemPrompt,
 	})
 	for _, msg := range history {
-		payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
+		payload = append(payload, llm.Message{
+			Role:             msg.Role,
+			Content:          msg.Content,
+			ReasoningContent: msg.ReasoningContent,
+		})
 	}
 
 	// 4. Send to DeepSeek and loop until it stops requesting tools
@@ -321,7 +319,7 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 		// If there are no tool calls, it's a final text response. We are done!
 		if len(responseMsg.ToolCalls) == 0 {
 			slog.Info("Task completed", "response_length", len(responseMsg.Content))
-			dbStore.SaveMessage("assistant", responseMsg.Content)
+			dbStore.SaveMessage("assistant", responseMsg.Content, responseMsg.ReasoningContent)
 			if isatty.IsTerminal(os.Stdout.Fd()) {
 				fmt.Printf("\n[Ivai] %s\n", responseMsg.Content)
 			}
@@ -345,7 +343,7 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 
 		// Execute all requested tools
 		for _, toolCall := range responseMsg.ToolCalls {
-			slog.Info("Executing tool", "name", toolCall.Function.Name, "args", toolCall.Function.Arguments)
+			slog.Info("Executing tool", "name", toolCall.Function.Name)
 			
 			var toolResult string
 

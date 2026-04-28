@@ -153,7 +153,7 @@ func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
 		AnthropicKey: anthropicKey,
 		GeminiKey:    geminiKey,
 		HTTPClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 120 * time.Second,
 		},
 		DeepSeekURL:  "https://api.deepseek.com/chat/completions",
 		AnthropicURL: "https://api.anthropic.com/v1/messages",

@@ -14,8 +14,9 @@ type Store struct {
 
 // Message represents a single interaction log
 type Message struct {
-	Role    string
-	Content string
+	Role             string
+	Content          string
+	ReasoningContent string
 }
 
 // NewStore initializes the SQLite database and schemas
@@ -26,11 +27,13 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	// Create the short-term memory table
+	// We add reasoning_content to support models like DeepSeek-R1
 	schema := `
 	CREATE TABLE IF NOT EXISTS messages (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		role TEXT NOT NULL,
 		content TEXT NOT NULL,
+		reasoning_content TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
 
@@ -42,15 +45,14 @@ func NewStore(dbPath string) (*Store, error) {
 }
 
 // SaveMessage writes a new prompt or response to memory
-func (s *Store) SaveMessage(role, content string) error {
-	_, err := s.db.Exec("INSERT INTO messages (role, content) VALUES (?, ?)", role, content)
+func (s *Store) SaveMessage(role, content, reasoning string) error {
+	_, err := s.db.Exec("INSERT INTO messages (role, content, reasoning_content) VALUES (?, ?, ?)", role, content, reasoning)
 	return err
 }
 
 // GetRecentMessages retrieves the last N messages to build the LLM context window
 func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
-	// We order by ID DESC to get the newest, then reverse in Go so chronological order is maintained
-	query := `SELECT role, content FROM (SELECT id, role, content FROM messages ORDER BY id DESC LIMIT ?) ORDER BY id ASC`
+	query := `SELECT role, content, reasoning_content FROM (SELECT id, role, content, reasoning_content FROM messages ORDER BY id DESC LIMIT ?) ORDER BY id ASC`
 
 	rows, err := s.db.Query(query, limit)
 	if err != nil {
@@ -61,7 +63,7 @@ func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.Role, &msg.Content); err != nil {
+		if err := rows.Scan(&msg.Role, &msg.Content, &msg.ReasoningContent); err != nil {
 			return nil, err
 		}
 		messages = append(messages, msg)
