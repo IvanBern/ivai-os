@@ -7,3 +7,5 @@
 /ivai.service
 *.exe
 *.log
+/test-results/
+.DS_Store

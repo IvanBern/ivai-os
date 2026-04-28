@@ -139,6 +139,11 @@ type Gateway struct {
 	AnthropicKey string
 	GeminiKey    string
 	HTTPClient   *http.Client
+
+	// Base URLs for testing
+	DeepSeekURL    string
+	AnthropicURL   string
+	GeminiURL      string
 }
 
 func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
@@ -149,6 +154,9 @@ func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
 		HTTPClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
+		DeepSeekURL:  "https://api.deepseek.com/chat/completions",
+		AnthropicURL: "https://api.anthropic.com/v1/messages",
+		GeminiURL:    "https://generativelanguage.googleapis.com/v1beta/models",
 	}
 }
 
@@ -174,7 +182,7 @@ func (g *Gateway) chatDeepSeek(ctx context.Context, messages []Message, tools []
 		return Message{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.deepseek.com/chat/completions", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.DeepSeekURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return Message{}, err
 	}
@@ -281,7 +289,7 @@ func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools [
 		return Message{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.AnthropicURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return Message{}, err
 	}
@@ -397,7 +405,7 @@ func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []To
 		return Message{}, err
 	}
 
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.GeminiKey)
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", g.GeminiURL, model, g.GeminiKey)
 	// If system instructions exist, they are often added differently or as a separate field in v1beta
 	// but for simplicity we often append them to the first user message or use the dedicated field if supported.
 	// Gemini 1.5 supports system_instruction field.

@@ -5,8 +5,11 @@ MAIN_PATH=cmd/ivai/main.go
 CLI_PATH=cmd/ivaictl/main.go
 VM_TARGET=ivai-os-linux@orb
 BIN_DEST=/usr/local/bin/ivai-os
+TEST_RESULTS=test-results
+GOPATH=$(shell go env GOPATH)
+PATH:=$(GOPATH)/bin:$(PATH)
 
-.PHONY: tidy build build-cli deploy service run clean dev install-cli
+.PHONY: tidy build build-cli deploy service run clean dev install-cli test test-reports deploy-secrets install-test-tools
 
 tidy:
 	go mod tidy
@@ -25,6 +28,36 @@ install-cli: build-cli
 	@echo "🚚 Installing ivaictl to /usr/local/bin..."
 	sudo mv $(CLI_NAME) /usr/local/bin/$(CLI_NAME)
 	@echo "✅ ivaictl installed!"
+
+# 1.6 Testing
+test:
+	@echo "🧪 Running all tests..."
+	go test -v ./...
+
+install-test-tools:
+	@echo "🛠 Installing test reporting tools..."
+	go install github.com/jstemmer/go-junit-report/v2@latest
+	go install github.com/jandelgado/gcov2lcov@latest
+
+test-reports:
+	@echo "📊 Generating test reports..."
+	@mkdir -p $(TEST_RESULTS)
+	# Run tests with coverage and generate JUnit XML
+	go test -v -coverprofile=$(TEST_RESULTS)/coverage.out ./... | tee $(TEST_RESULTS)/test.log
+	@if command -v go-junit-report > /dev/null; then \
+		cat $(TEST_RESULTS)/test.log | go-junit-report > $(TEST_RESULTS)/junit.xml; \
+	else \
+		echo "⚠️ go-junit-report not found, skipping JUnit XML generation. Run 'make install-test-tools'."; \
+	fi
+	# Generate HTML report
+	go tool cover -html=$(TEST_RESULTS)/coverage.out -o $(TEST_RESULTS)/coverage.html
+	# Generate LCOV
+	@if command -v gcov2lcov > /dev/null; then \
+		gcov2lcov -infile $(TEST_RESULTS)/coverage.out -outfile $(TEST_RESULTS)/coverage.lcov; \
+	else \
+		echo "⚠️ gcov2lcov not found, skipping LCOV generation. Run 'make install-test-tools'."; \
+	fi
+	@echo "✅ Reports generated in $(TEST_RESULTS)/"
 
 # 2. Build, push, and set permissions in one shot
 deploy: build
@@ -57,4 +90,5 @@ run:
 dev: deploy run
 
 clean:
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) $(CLI_NAME)
+	rm -rf $(TEST_RESULTS)
