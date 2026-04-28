@@ -36,6 +36,7 @@
 ## 🧠 Phase 6: Long-Term Intelligence
 - [ ] **Embedded Vector Database**: Integrate a pure-Go vector search extension (`sqlite-vec` or `chromem-go`) to keep the OS a single, dependency-free binary.
 - [ ] **RAG Pipeline**: Implement Retrieval-Augmented Generation to automatically search past solved problems, code snippets, or architecture docs before querying the LLM.
+- [ ] **Dynamic Model Discovery**: Implement tools for Ivai to query provider APIs (`/v1/models`) to discover available brains and cache them in its persistent memory, allowing the system to self-update its routing logic.
 
 ## 🤖 Phase 7: Self-Evolution & Parallelism
 - [ ] **Model Context Protocol (MCP)**: Establish a standardized Tool Registry so spawned sub-agents can dynamically share and discover tools without duplicating code.

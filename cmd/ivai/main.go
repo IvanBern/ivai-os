@@ -129,12 +129,17 @@ func main() {
 					model = "claude-3-5-sonnet-20241022"
 					t = strings.Replace(t, "@claude", "", 1)
 				} else if strings.Contains(strings.ToLower(t), "@gemini") {
-					model = "gemini-1.5-pro"
+					model = "gemini-2.5-pro"
 					t = strings.Replace(t, "@gemini", "", 1)
 				} else if strings.Contains(strings.ToLower(t), "@deepseek") {
 					model = "deepseek-v4-pro"
 					t = strings.Replace(t, "@deepseek", "", 1)
+				} else if strings.Contains(strings.ToLower(t), "@research") {
+					model = "deep-research-max-preview"
+					t = strings.Replace(t, "@research", "", 1)
 				}
+
+				slog.Info("Task routing", "model", model, "instruction", t)
 
 				// 1. Define the tools available to Ivai
 				availableTools := []llm.Tool{

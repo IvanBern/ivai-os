@@ -34,6 +34,13 @@ deploy: build
 	ssh $(VM_TARGET) "sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo chown ivai:ivai $(BIN_DEST) && sudo chmod +x $(BIN_DEST)"
 	@echo "✅ Deployment complete!"
 
+# 2.1 Deploy environment secrets
+deploy-secrets:
+	@echo "🔐 Shipping secrets to Debian VM..."
+	scp .env $(VM_TARGET):~/
+	ssh $(VM_TARGET) "sudo mkdir -p /etc/ivai && sudo mv ~/.env /etc/ivai/.env && sudo chown ivai:ivai /etc/ivai/.env && sudo chmod 600 /etc/ivai/.env"
+	@echo "✅ Secrets deployed!"
+
 # 2.5 Deploy systemd service
 service: deploy
 	@echo "📝 Deploying systemd service..."
