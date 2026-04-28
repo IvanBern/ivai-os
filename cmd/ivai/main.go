@@ -123,209 +123,7 @@ func main() {
 		case task := <-taskChan:
 			// Process tasks asynchronously
 			go func(t string) {
-				// 0. Determine which model to use (default to deepseek-v4-pro)
-				model := "deepseek-v4-pro"
-				if strings.Contains(strings.ToLower(t), "@claude") {
-					model = "claude-3-5-sonnet-20241022"
-					t = strings.Replace(t, "@claude", "", 1)
-				} else if strings.Contains(strings.ToLower(t), "@gemini") {
-					model = "gemini-2.5-pro"
-					t = strings.Replace(t, "@gemini", "", 1)
-				} else if strings.Contains(strings.ToLower(t), "@deepseek") {
-					model = "deepseek-v4-pro"
-					t = strings.Replace(t, "@deepseek", "", 1)
-				} else if strings.Contains(strings.ToLower(t), "@research") {
-					model = "deep-research-max-preview"
-					t = strings.Replace(t, "@research", "", 1)
-				}
-
-				slog.Info("Task routing", "model", model, "instruction", t)
-
-				// 1. Define the tools available to Ivai
-				availableTools := []llm.Tool{
-					{
-						Type: "function",
-						Function: llm.FunctionDefinition{
-							Name:        "read_file",
-							Description: "Reads the contents of a file at the given path on the local filesystem.",
-							Parameters: map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"filepath": map[string]interface{}{"type": "string"},
-								},
-								"required": []string{"filepath"},
-							},
-						},
-					},
-					{
-						Type: "function",
-						Function: llm.FunctionDefinition{
-							Name:        "write_file",
-							Description: "Writes text content to a file at the given path, overwriting it if it exists.",
-							Parameters: map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"filepath": map[string]interface{}{"type": "string"},
-									"content":  map[string]interface{}{"type": "string"},
-								},
-								"required": []string{"filepath", "content"},
-							},
-						},
-					},
-					{
-						Type: "function",
-						Function: llm.FunctionDefinition{
-							Name:        "execute_command",
-							Description: "Executes a bash shell command on the host Debian system and returns the output.",
-							Parameters: map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"command": map[string]interface{}{"type": "string"},
-								},
-								"required": []string{"command"},
-							},
-						},
-					},
-					{
-						Type: "function",
-						Function: llm.FunctionDefinition{
-							Name:        "execute_wasm",
-							Description: "Executes a compiled WebAssembly (.wasm) binary in a secure, isolated sandbox with strict timeouts. Passes data via stdin and returns stdout.",
-							Parameters: map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"filepath":   map[string]interface{}{"type": "string", "description": "Absolute path to the .wasm file on disk"},
-									"payload":    map[string]interface{}{"type": "string", "description": "Data to send to the Wasm module via standard input (stdin)"},
-									"timeout_ms": map[string]interface{}{"type": "integer", "description": "Execution timeout in milliseconds (e.g., 1000)"},
-								},
-								"required": []string{"filepath", "payload", "timeout_ms"},
-							},
-						},
-					},
-					{
-						Type: "function",
-						Function: llm.FunctionDefinition{
-							Name:        "http_request",
-							Description: "Performs an HTTP request (GET, POST, etc.) and returns the response body.",
-							Parameters: map[string]interface{}{
-								"type": "object",
-								"properties": map[string]interface{}{
-									"method":  map[string]interface{}{"type": "string", "description": "HTTP method (e.g., GET, POST)"},
-									"url":     map[string]interface{}{"type": "string", "description": "Target URL"},
-									"body":    map[string]interface{}{"type": "string", "description": "Request body (optional)"},
-									"headers": map[string]interface{}{"type": "object", "description": "HTTP headers (optional)"},
-								},
-								"required": []string{"method", "url"},
-							},
-						},
-					},
-				}
-
-				// 2. Save user prompt to memory
-				dbStore.SaveMessage("user", t)
-				history, _ := dbStore.GetRecentMessages(10)
-
-				// 3. Construct the payload
-				homeDir, _ := os.UserHomeDir()
-				systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your persistent workspace is %s. You have a continuous memory and access to the local filesystem. Use your workspace for projects and data storage. You have 'git' installed and configured for version control. You also have an 'http_request' tool for network access.", homeDir)
-
-				var payload []llm.Message
-				payload = append(payload, llm.Message{
-					Role:    "system",
-					Content: systemPrompt,
-				})
-				for _, msg := range history {
-					payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
-				}
-
-				// 4. Send to DeepSeek and loop until it stops requesting tools
-				for {
-					responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, model) 
-					if err != nil {
-						slog.Error("LLM Execution Failed", "error", err)
-						fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
-						return
-					}
-					
-					// If there are no tool calls, it's a final text response. We are done!
-					if len(responseMsg.ToolCalls) == 0 {
-						slog.Info("Task completed", "response_length", len(responseMsg.Content))
-						dbStore.SaveMessage("assistant", responseMsg.Content)
-						fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
-						break // Exit the reasoning loop
-					}
-
-					// Otherwise, the LLM wants to execute tools.
-					fmt.Printf("\n[Ivai System] Thinking...\n")
-					
-					// Append the LLM's tool request to history
-					payload = append(payload, responseMsg)
-
-					// Execute all requested tools
-					for _, toolCall := range responseMsg.ToolCalls {
-						slog.Info("Executing tool", "name", toolCall.Function.Name)
-						fmt.Printf("[Ivai Tool] Running: %s\n", toolCall.Function.Name)
-						
-						var toolResult string
-
-						if toolCall.Function.Name == "read_file" {
-							var args struct{ Filepath string `json:"filepath"` }
-							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-							content, err := tools.ReadFile(args.Filepath)
-							if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = content }
-							
-						} else if toolCall.Function.Name == "write_file" {
-							var args struct {
-								Filepath string `json:"filepath"`
-								Content  string `json:"content"`
-							}
-							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-							err := tools.WriteFile(args.Filepath, args.Content)
-							if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = "File written successfully." }
-							
-						} else if toolCall.Function.Name == "execute_command" {
-							var args struct{ Command string `json:"command"` }
-							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-							output, err := tools.ExecuteCommand(args.Command)
-							if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = output }
-							
-						} else if toolCall.Function.Name == "execute_wasm" {
-							var args struct {
-								Filepath  string `json:"filepath"`
-								Payload   string `json:"payload"`
-								TimeoutMs int    `json:"timeout_ms"`
-							}
-							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-							
-							wasmBytes, err := os.ReadFile(args.Filepath)
-							if err != nil {
-								toolResult = fmt.Sprintf("Error reading Wasm file: %v", err)
-							} else {
-								output, err := wasmEngine.Execute(context.Background(), wasmBytes, args.Payload, args.TimeoutMs)
-								if err != nil { toolResult = fmt.Sprintf("Sandbox error: %v", err) } else { toolResult = output }
-							}
-						} else if toolCall.Function.Name == "http_request" {
-							var args struct {
-								Method  string            `json:"method"`
-								URL     string            `json:"url"`
-								Body    string            `json:"body"`
-								Headers map[string]string `json:"headers"`
-							}
-							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-							output, err := tools.HttpRequest(args.Method, args.URL, args.Body, args.Headers)
-							if err != nil { toolResult = fmt.Sprintf("HTTP error: %v", err) } else { toolResult = output }
-						}
-
-						// Append the tool result to the payload so the LLM can read it in the next loop iteration
-						payload = append(payload, llm.Message{
-							Role:       "tool",
-							Content:    toolResult,
-							ToolCallID: toolCall.ID,
-						})
-					}
-					// The loop continues, sending the updated payload back to DeepSeek...
-				}
-
+				processTask(ctx, t, gateway, dbStore, wasmEngine)
 			}(task)
 
 		case <-ctx.Done():
@@ -340,6 +138,210 @@ func main() {
 
 			slog.Info("Ivai OS gracefully stopped.")
 			return
+		}
+	}
+}
+
+func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *memory.Store, wasmEngine *sandbox.WasmRuntime) {
+	// 0. Determine which model to use (default to deepseek-v4-pro)
+	model := "deepseek-v4-pro"
+	if strings.Contains(strings.ToLower(t), "@claude") {
+		model = "claude-3-5-sonnet-20241022"
+		t = strings.Replace(t, "@claude", "", 1)
+	} else if strings.Contains(strings.ToLower(t), "@gemini") {
+		model = "gemini-2.5-pro"
+		t = strings.Replace(t, "@gemini", "", 1)
+	} else if strings.Contains(strings.ToLower(t), "@deepseek") {
+		model = "deepseek-v4-pro"
+		t = strings.Replace(t, "@deepseek", "", 1)
+	} else if strings.Contains(strings.ToLower(t), "@research") {
+		model = "deep-research-max-preview"
+		t = strings.Replace(t, "@research", "", 1)
+	}
+
+	slog.Info("Task routing", "model", model, "instruction", t)
+
+	// 1. Define the tools available to Ivai
+	availableTools := []llm.Tool{
+		{
+			Type: "function",
+			Function: llm.FunctionDefinition{
+				Name:        "read_file",
+				Description: "Reads the contents of a file at the given path on the local filesystem.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"filepath": map[string]interface{}{"type": "string"},
+					},
+					"required": []string{"filepath"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.FunctionDefinition{
+				Name:        "write_file",
+				Description: "Writes text content to a file at the given path, overwriting it if it exists.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"filepath": map[string]interface{}{"type": "string"},
+						"content":  map[string]interface{}{"type": "string"},
+					},
+					"required": []string{"filepath", "content"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.FunctionDefinition{
+				Name:        "execute_command",
+				Description: "Executes a bash shell command on the host Debian system and returns the output.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"command": map[string]interface{}{"type": "string"},
+					},
+					"required": []string{"command"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.FunctionDefinition{
+				Name:        "execute_wasm",
+				Description: "Executes a compiled WebAssembly (.wasm) binary in a secure, isolated sandbox with strict timeouts. Passes data via stdin and returns stdout.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"filepath":   map[string]interface{}{"type": "string", "description": "Absolute path to the .wasm file on disk"},
+						"payload":    map[string]interface{}{"type": "string", "description": "Data to send to the Wasm module via standard input (stdin)"},
+						"timeout_ms": map[string]interface{}{"type": "integer", "description": "Execution timeout in milliseconds (e.g., 1000)"},
+					},
+					"required": []string{"filepath", "payload", "timeout_ms"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.FunctionDefinition{
+				Name:        "http_request",
+				Description: "Performs an HTTP request (GET, POST, etc.) and returns the response body.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"method":  map[string]interface{}{"type": "string", "description": "HTTP method (e.g., GET, POST)"},
+						"url":     map[string]interface{}{"type": "string", "description": "Target URL"},
+						"body":    map[string]interface{}{"type": "string", "description": "Request body (optional)"},
+						"headers": map[string]interface{}{"type": "object", "description": "HTTP headers (optional)"},
+					},
+					"required": []string{"method", "url"},
+				},
+			},
+		},
+	}
+
+	// 2. Save user prompt to memory
+	dbStore.SaveMessage("user", t)
+	history, _ := dbStore.GetRecentMessages(10)
+
+	// 3. Construct the payload
+	homeDir, _ := os.UserHomeDir()
+	systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your persistent workspace is %s. You have a continuous memory and access to the local filesystem. Use your workspace for projects and data storage. You have 'git' installed and configured for version control. You also have an 'http_request' tool for network access.", homeDir)
+
+	var payload []llm.Message
+	payload = append(payload, llm.Message{
+		Role:    "system",
+		Content: systemPrompt,
+	})
+	for _, msg := range history {
+		payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
+	}
+
+	// 4. Send to DeepSeek and loop until it stops requesting tools
+	for {
+		responseMsg, err := gateway.Chat(ctx, payload, availableTools, model) 
+		if err != nil {
+			slog.Error("LLM Execution Failed", "error", err)
+			fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
+			return
+		}
+		
+		// If there are no tool calls, it's a final text response. We are done!
+		if len(responseMsg.ToolCalls) == 0 {
+			slog.Info("Task completed", "response_length", len(responseMsg.Content))
+			dbStore.SaveMessage("assistant", responseMsg.Content)
+			fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
+			break // Exit the reasoning loop
+		}
+
+		// Otherwise, the LLM wants to execute tools.
+		fmt.Printf("\n[Ivai System] Thinking...\n")
+		
+		// Append the LLM's tool request to history
+		payload = append(payload, responseMsg)
+
+		// Execute all requested tools
+		for _, toolCall := range responseMsg.ToolCalls {
+			slog.Info("Executing tool", "name", toolCall.Function.Name)
+			fmt.Printf("[Ivai Tool] Running: %s\n", toolCall.Function.Name)
+			
+			var toolResult string
+
+			if toolCall.Function.Name == "read_file" {
+				var args struct{ Filepath string `json:"filepath"` }
+				json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+				content, err := tools.ReadFile(args.Filepath)
+				if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = content }
+				
+			} else if toolCall.Function.Name == "write_file" {
+				var args struct {
+					Filepath string `json:"filepath"`
+					Content  string `json:"content"`
+				}
+				json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+				err := tools.WriteFile(args.Filepath, args.Content)
+				if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = "File written successfully." }
+				
+			} else if toolCall.Function.Name == "execute_command" {
+				var args struct{ Command string `json:"command"` }
+				json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+				output, err := tools.ExecuteCommand(args.Command)
+				if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = output }
+				
+			} else if toolCall.Function.Name == "execute_wasm" {
+				var args struct {
+					Filepath  string `json:"filepath"`
+					Payload   string `json:"payload"`
+					TimeoutMs int    `json:"timeout_ms"`
+				}
+				json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+				
+				wasmBytes, err := os.ReadFile(args.Filepath)
+				if err != nil {
+					toolResult = fmt.Sprintf("Error reading Wasm file: %v", err)
+				} else {
+					output, err := wasmEngine.Execute(ctx, wasmBytes, args.Payload, args.TimeoutMs)
+					if err != nil { toolResult = fmt.Sprintf("Sandbox error: %v", err) } else { toolResult = output }
+				}
+			} else if toolCall.Function.Name == "http_request" {
+				var args struct {
+					Method  string            `json:"method"`
+					URL     string            `json:"url"`
+					Body    string            `json:"body"`
+					Headers map[string]string `json:"headers"`
+				}
+				json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+				output, err := tools.HttpRequest(args.Method, args.URL, args.Body, args.Headers)
+				if err != nil { toolResult = fmt.Sprintf("HTTP error: %v", err) } else { toolResult = output }
+			}
+
+			// Append the tool result to the payload so the LLM can read it in the next loop iteration
+			payload = append(payload, llm.Message{
+				Role:       "tool",
+				Content:    toolResult,
+				ToolCallID: toolCall.ID,
+			})
 		}
 	}
 }
