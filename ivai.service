@@ -1,0 +1,18 @@
+[Unit]
+Description=Ivai OS Autonomous Agent
+After=network.target
+
+[Service]
+Type=simple
+User=ivai
+Group=ivai
+WorkingDirectory=/etc/ivai
+ExecStart=/usr/local/bin/ivai-os
+Restart=always
+RestartSec=5
+# Ensure the logs are captured by journald
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

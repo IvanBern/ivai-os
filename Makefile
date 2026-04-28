@@ -22,7 +22,14 @@ deploy: build
 	ssh $(VM_TARGET) "sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo chown ivai:ivai $(BIN_DEST) && sudo chmod +x $(BIN_DEST)"
 	@echo "✅ Deployment complete!"
 
-# 3. Run the OS securely inside the VM
+# 2.5 Deploy systemd service
+service:
+	@echo "📝 Deploying systemd service..."
+	scp ivai.service $(VM_TARGET):~/
+	ssh $(VM_TARGET) "sudo mv ~/ivai.service /etc/systemd/system/ivai.service && sudo systemctl daemon-reload && sudo systemctl enable ivai && sudo systemctl restart ivai"
+	@echo "✅ Service deployed and started!"
+
+# 3. Run the OS securely inside the VM (Foreground/Interactive)
 run:
 	@echo "🧠 Waking up Ivai OS..."
 	ssh -t $(VM_TARGET) "sudo -u ivai $(BIN_DEST)"

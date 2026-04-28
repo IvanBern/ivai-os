@@ -11,7 +11,7 @@
 - [x] **The Agentic Tool Protocol**: Multi-step reasoning loop with support for `read_file`, `write_file`, `execute_command`, and `execute_wasm`.
 
 ## 🚀 Phase 3: Residency & Advanced Interaction
-- [ ] **The Daemon (Systemd)**: Implement a systemd service unit to make Ivai OS a permanent resident of the Debian VM. It will start automatically on boot and restart on failure.
+- [x] **The Daemon (Systemd)**: Implement a systemd service unit to make Ivai OS a permanent resident of the Debian VM. It will start automatically on boot and restart on failure.
 - [ ] **The Mac Client**: Develop a native macOS CLI (or web interface) that communicates with Ivai via the HTTP port 8080. This removes the need for SSH to assign tasks.
 - [ ] **Persistent Workspace**: Define a standard "Ivai Home" directory for the agent to manage its own projects and persistent data.
 
