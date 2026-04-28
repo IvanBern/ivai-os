@@ -345,7 +345,7 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 
 		// Execute all requested tools
 		for _, toolCall := range responseMsg.ToolCalls {
-			slog.Info("Executing tool", "name", toolCall.Function.Name)
+			slog.Info("Executing tool", "name", toolCall.Function.Name, "args", toolCall.Function.Arguments)
 			
 			var toolResult string
 
