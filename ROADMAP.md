@@ -26,6 +26,7 @@
 ### 1. API Security (The HTTP Layer)
 - [ ] **Authentication Middleware**: Implement API Key validation for the HTTP router.
 - [ ] **mTLS**: Enforce mutual TLS for cryptographically secure Mac-to-VM communication.
+- [ ] **Interactive Response**: Update the Mac Client and Kernel to "wait" for task completion and stream the agent's response back to the terminal in real-time.
 
 ### 2. Advanced Sandboxing (The OS Layer)
 - [ ] **Directory Whitelisting**: Restrict File I/O tools to specific workspace boundaries.
@@ -36,8 +37,9 @@
 - [ ] **Vector Database**: Integrate an embedded vector store (e.g., Chroma/Milvus) for semantic memory.
 - [ ] **RAG Pipeline**: Implement Retrieval-Augmented Generation to search past solutions before querying the LLM.
 
-## 🤖 Phase 7: Self-Evolution
-- [ ] **GitHub Ops**: Tools for `git_clone`, `git_commit`, and opening Pull Requests.
+## 🤖 Phase 7: Self-Evolution & Parallelism
+- [ ] **GitHub API Access**: Provide Ivai with a token to interact with repositories (clone, commit, open Pull Requests).
+- [ ] **Sub-Agent Spawning**: Enable Ivai to spawn child processes or sandboxed "sub-agents" for parallel task execution.
 - [ ] **Self-Modification Loop**: Enable Ivai to branch its own source code, implement features, and submit PRs for human review.
 
 ## 📊 Phase 8: Observability
