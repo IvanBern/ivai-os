@@ -18,6 +18,7 @@ import (
 	"github.com/IvanBern/ivai-os/internal/sandbox"
 	"github.com/IvanBern/ivai-os/internal/tools"
 	"github.com/joho/godotenv"
+	"github.com/mattn/go-isatty"
 )
 
 // Task payload structure for the HTTP server
@@ -79,7 +80,7 @@ func main() {
 		// Small delay so the prompt appears after initialization logs
 		time.Sleep(100 * time.Millisecond)
 		scanner := bufio.NewScanner(os.Stdin)
-		fmt.Print("\nIvai > ")
+		printPrompt()
 		for scanner.Scan() {
 			input := strings.TrimSpace(scanner.Text())
 			if input != "" {
@@ -87,7 +88,7 @@ func main() {
 			}
 			// Wait a moment for logs to print before re-prompting
 			time.Sleep(50 * time.Millisecond)
-			fmt.Print("Ivai > ")
+			printPrompt()
 		}
 	}()
 
@@ -139,6 +140,12 @@ func main() {
 			slog.Info("Ivai OS gracefully stopped.")
 			return
 		}
+	}
+}
+
+func printPrompt() {
+	if isatty.IsTerminal(os.Stdout.Fd()) {
+		fmt.Print("Ivai > ")
 	}
 }
 
@@ -263,7 +270,7 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 		responseMsg, err := gateway.Chat(ctx, payload, availableTools, model) 
 		if err != nil {
 			slog.Error("LLM Execution Failed", "error", err)
-			fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
+			printPrompt()
 			return
 		}
 		
@@ -271,12 +278,15 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 		if len(responseMsg.ToolCalls) == 0 {
 			slog.Info("Task completed", "response_length", len(responseMsg.Content))
 			dbStore.SaveMessage("assistant", responseMsg.Content)
-			fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
+			if isatty.IsTerminal(os.Stdout.Fd()) {
+				fmt.Printf("\n[Ivai] %s\n", responseMsg.Content)
+			}
+			printPrompt()
 			break // Exit the reasoning loop
 		}
 
 		// Otherwise, the LLM wants to execute tools.
-		fmt.Printf("\n[Ivai System] Thinking...\n")
+		slog.Info("Thinking...")
 		
 		// Append the LLM's tool request to history
 		payload = append(payload, responseMsg)
@@ -284,7 +294,6 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 		// Execute all requested tools
 		for _, toolCall := range responseMsg.ToolCalls {
 			slog.Info("Executing tool", "name", toolCall.Function.Name)
-			fmt.Printf("[Ivai Tool] Running: %s\n", toolCall.Function.Name)
 			
 			var toolResult string
 
