@@ -1,6 +1,9 @@
+/bin/
 .env
-ivai-os-linux
-ivai-os
+/ivai-os-linux
+/ivai-os
+/ivai
+/ivaictl
+/ivai.service
 *.exe
 *.log
-ivai

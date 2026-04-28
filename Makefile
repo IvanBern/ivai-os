@@ -1,10 +1,12 @@
 # Variables
 BINARY_NAME=ivai-os-linux
+CLI_NAME=ivaictl
 MAIN_PATH=cmd/ivai/main.go
+CLI_PATH=cmd/ivaictl/main.go
 VM_TARGET=ivai-os-linux@orb
 BIN_DEST=/usr/local/bin/ivai-os
 
-.PHONY: tidy build deploy run clean dev
+.PHONY: tidy build build-cli deploy service run clean dev install-cli
 
 tidy:
 	go mod tidy
@@ -13,6 +15,16 @@ tidy:
 build:
 	@echo "🔨 Cross-compiling for Linux ARM64..."
 	GOOS=linux GOARCH=arm64 go build -o $(BINARY_NAME) $(MAIN_PATH)
+
+# 1.5 Compile the Mac CLI
+build-cli:
+	@echo "🍎 Building macOS CLI..."
+	go build -o $(CLI_NAME) $(CLI_PATH)
+
+install-cli: build-cli
+	@echo "🚚 Installing ivaictl to /usr/local/bin..."
+	sudo mv $(CLI_NAME) /usr/local/bin/$(CLI_NAME)
+	@echo "✅ ivaictl installed!"
 
 # 2. Build, push, and set permissions in one shot
 deploy: build

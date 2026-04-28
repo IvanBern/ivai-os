@@ -12,7 +12,7 @@
 
 ## 🚀 Phase 3: Residency & Advanced Interaction
 - [x] **The Daemon (Systemd)**: Implement a systemd service unit to make Ivai OS a permanent resident of the Debian VM. It will start automatically on boot and restart on failure.
-- [ ] **The Mac Client**: Develop a native macOS CLI (or web interface) that communicates with Ivai via the HTTP port 8080. This removes the need for SSH to assign tasks.
+- [x] **The Mac Client**: Develop a native macOS CLI (or web interface) that communicates with Ivai via the HTTP port 8080. This removes the need for SSH to assign tasks.
 - [ ] **Persistent Workspace**: Define a standard "Ivai Home" directory for the agent to manage its own projects and persistent data.
 
 ## 🛠 Phase 4: Advanced Tooling & Autonomy
