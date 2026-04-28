@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -103,8 +104,13 @@ func main() {
 	}
 
 	go func() {
+		ln, err := net.Listen("tcp", ":"+port)
+		if err != nil {
+			slog.Error("HTTP server failed to bind", "port", port, "err", err)
+			return
+		}
 		slog.Info("HTTP Server listening", "port", port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "err", err)
 		}
 	}()
