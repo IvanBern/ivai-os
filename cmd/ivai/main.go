@@ -92,11 +92,13 @@ func main() {
 	}()
 
 	// Initialize the LLM Gateway
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if apiKey == "" {
-		slog.Warn("DEEPSEEK_API_KEY is not set. LLM execution will fail.")
+	deepSeekKey := os.Getenv("DEEPSEEK_API_KEY")
+	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+
+	if deepSeekKey == "" && anthropicKey == "" {
+		slog.Warn("Neither DEEPSEEK_API_KEY nor ANTHROPIC_API_KEY is set. LLM execution will fail.")
 	}
-	gateway := llm.NewGateway(apiKey)
+	gateway := llm.NewGateway(deepSeekKey, anthropicKey)
 
 	// Initialize the Persistent Memory Subsystem
 	slog.Info("Mounting persistent memory subsystem...")
@@ -120,6 +122,16 @@ func main() {
 		case task := <-taskChan:
 			// Process tasks asynchronously
 			go func(t string) {
+				// 0. Determine which model to use (default to deepseek-v4-pro)
+				model := "deepseek-v4-pro"
+				if strings.Contains(strings.ToLower(t), "@claude") {
+					model = "claude-3-5-sonnet-20241022"
+					t = strings.Replace(t, "@claude", "", 1)
+				} else if strings.Contains(strings.ToLower(t), "@deepseek") {
+					model = "deepseek-v4-pro"
+					t = strings.Replace(t, "@deepseek", "", 1)
+				}
+
 				// 1. Define the tools available to Ivai
 				availableTools := []llm.Tool{
 					{
@@ -219,7 +231,7 @@ func main() {
 
 				// 4. Send to DeepSeek and loop until it stops requesting tools
 				for {
-					responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-v4-pro") 
+					responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, model) 
 					if err != nil {
 						slog.Error("LLM Execution Failed", "error", err)
 						fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)

@@ -17,7 +17,7 @@ Ivai OS has successfully moved from a scaffold to a complete, production-ready a
 Ivai OS follows a modular kernel-and-subsystem design. For a deep dive into the internal specifications, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 - **The Kernel**: A Go-based event loop orchestrating reasoning and tool routing.
-- **Cognitive Engine**: DeepSeek-V4-Pro powered tool calling with autonomous multi-step reasoning.
+- **Cognitive Engine**: Multi-model (DeepSeek-V4-Pro & Claude 3.5) powered tool calling with autonomous multi-step reasoning. Swap models on the fly using `@claude` or `@deepseek`.
 - **Execution Sandbox**: Secure WebAssembly (Wazero) micro-VM for untrusted code.
 - **Memory Subsystem**: Persistent SQLite storage for long-term context.
 - **Mac Client**: Remote control via the `ivaictl` CLI.

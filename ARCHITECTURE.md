@@ -11,8 +11,8 @@ Ivai OS has transitioned from a simple Go script to a daemonized, agentic operat
 
 ## 2. Cognitive Engine (The Brain)
 
-- **LLM Gateway**: DeepSeek-V4-Pro API integration utilizing the OpenAI-compatible Tool Calling standard.
-- **Reasoning Loop**: A recursive Go `for` loop that intercepts tool requests, executes local Go functions, feeds the results back to the LLM, and continues chaining actions autonomously until a final textual answer is reached.
+- **LLM Gateway**: Multi-model support for DeepSeek-V4-Pro and Anthropic (Claude 3.5) utilizing a unified Tool Calling standard. Supports seamless model swapping via instruction-level hints (e.g., `@claude`).
+- **Reasoning Loop**: A recursive Go `for` loop that intercepts tool requests, executes local Go functions, feeds the results back to the LLM (DeepSeek or Anthropic), and continues chaining actions autonomously until a final textual answer is reached.
 
 ## 3. Memory Subsystem (The Context)
 
