@@ -94,11 +94,12 @@ func main() {
 	// Initialize the LLM Gateway
 	deepSeekKey := os.Getenv("DEEPSEEK_API_KEY")
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+	geminiKey := os.Getenv("GEMINI_API_KEY")
 
-	if deepSeekKey == "" && anthropicKey == "" {
-		slog.Warn("Neither DEEPSEEK_API_KEY nor ANTHROPIC_API_KEY is set. LLM execution will fail.")
+	if deepSeekKey == "" && anthropicKey == "" && geminiKey == "" {
+		slog.Warn("No LLM API keys (DeepSeek, Anthropic, or Gemini) are set. LLM execution will fail.")
 	}
-	gateway := llm.NewGateway(deepSeekKey, anthropicKey)
+	gateway := llm.NewGateway(deepSeekKey, anthropicKey, geminiKey)
 
 	// Initialize the Persistent Memory Subsystem
 	slog.Info("Mounting persistent memory subsystem...")
@@ -127,6 +128,9 @@ func main() {
 				if strings.Contains(strings.ToLower(t), "@claude") {
 					model = "claude-3-5-sonnet-20241022"
 					t = strings.Replace(t, "@claude", "", 1)
+				} else if strings.Contains(strings.ToLower(t), "@gemini") {
+					model = "gemini-1.5-pro"
+					t = strings.Replace(t, "@gemini", "", 1)
 				} else if strings.Contains(strings.ToLower(t), "@deepseek") {
 					model = "deepseek-v4-pro"
 					t = strings.Replace(t, "@deepseek", "", 1)

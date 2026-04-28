@@ -94,18 +94,58 @@ type AnthropicResponse struct {
 	Content []AnthropicContent `json:"content"`
 }
 
+// --- Gemini API Schemas ---
+
+type GeminiFunctionCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+type GeminiFunctionResponse struct {
+	Name     string                 `json:"name"`
+	Response map[string]interface{} `json:"response"`
+}
+
+type GeminiPart struct {
+	Text             string                  `json:"text,omitempty"`
+	FunctionCall     *GeminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *GeminiFunctionResponse `json:"functionResponse,omitempty"`
+}
+
+type GeminiContent struct {
+	Role  string       `json:"role"`
+	Parts []GeminiPart `json:"parts"`
+}
+
+type GeminiTool struct {
+	FunctionDeclarations []FunctionDefinition `json:"function_declarations"`
+}
+
+type GeminiRequest struct {
+	Contents []GeminiContent `json:"contents"`
+	Tools    []GeminiTool    `json:"tools,omitempty"`
+}
+
+type GeminiResponse struct {
+	Candidates []struct {
+		Content GeminiContent `json:"content"`
+	} `json:"candidates"`
+}
+
 // --- Gateway Implementation ---
 
 type Gateway struct {
 	DeepSeekKey  string
 	AnthropicKey string
+	GeminiKey    string
 	HTTPClient   *http.Client
 }
 
-func NewGateway(deepSeekKey, anthropicKey string) *Gateway {
+func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
 	return &Gateway{
 		DeepSeekKey:  deepSeekKey,
 		AnthropicKey: anthropicKey,
+		GeminiKey:    geminiKey,
 		HTTPClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -115,6 +155,9 @@ func NewGateway(deepSeekKey, anthropicKey string) *Gateway {
 func (g *Gateway) Chat(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
 	if strings.HasPrefix(model, "claude-") {
 		return g.chatAnthropic(ctx, messages, tools, model)
+	}
+	if strings.HasPrefix(model, "gemini-") {
+		return g.chatGemini(ctx, messages, tools, model)
 	}
 	return g.chatDeepSeek(ctx, messages, tools, model)
 }
@@ -174,8 +217,6 @@ func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools [
 		}
 
 		if m.Role == "tool" {
-			// Find previous user message to append tool result, or create new user message
-			// Anthropic requires tool_result to follow tool_use in a user message
 			if len(anthropicMessages) > 0 && anthropicMessages[len(anthropicMessages)-1].Role == "user" {
 				anthropicMessages[len(anthropicMessages)-1].Content = append(anthropicMessages[len(anthropicMessages)-1].Content, AnthropicContent{
 					Type:      "tool_result",
@@ -199,7 +240,6 @@ func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools [
 
 		am := AnthropicMessage{Role: m.Role}
 		if len(m.ToolCalls) > 0 {
-			// Assistant tool call
 			if m.Content != "" {
 				am.Content = append(am.Content, AnthropicContent{Type: "text", Text: m.Content})
 			}
@@ -266,7 +306,6 @@ func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools [
 		return Message{}, err
 	}
 
-	// Translate Anthropic response back to Ivai message
 	resMsg := Message{Role: "assistant"}
 	for _, c := range anthropicResp.Content {
 		if c.Type == "text" {
@@ -278,6 +317,142 @@ func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools [
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      c.Name,
+					Arguments: string(args),
+				},
+			})
+		}
+	}
+
+	return resMsg, nil
+}
+
+func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
+	var geminiContents []GeminiContent
+	var systemInstructions string
+
+	// Gemini separates system instructions from contents
+	for _, m := range messages {
+		if m.Role == "system" {
+			systemInstructions = m.Content
+			continue
+		}
+
+		role := m.Role
+		if role == "assistant" {
+			role = "model"
+		}
+
+		part := GeminiPart{}
+		if m.Role == "tool" {
+			role = "function"
+			part.FunctionResponse = &GeminiFunctionResponse{
+				Name: m.Name,
+				Response: map[string]interface{}{
+					"content": m.Content,
+				},
+			}
+		} else if len(m.ToolCalls) > 0 {
+			// Model requesting tool use
+			role = "model"
+			for _, tc := range m.ToolCalls {
+				var args map[string]interface{}
+				json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				geminiContents = append(geminiContents, GeminiContent{
+					Role: role,
+					Parts: []GeminiPart{{
+						FunctionCall: &GeminiFunctionCall{
+							Name: tc.Function.Name,
+							Args: args,
+						},
+					}},
+				})
+			}
+			continue
+		} else {
+			part.Text = m.Content
+		}
+
+		geminiContents = append(geminiContents, GeminiContent{
+			Role:  role,
+			Parts: []GeminiPart{part},
+		})
+	}
+
+	geminiTools := []GeminiTool{}
+	if len(tools) > 0 {
+		declarations := make([]FunctionDefinition, len(tools))
+		for i, t := range tools {
+			declarations[i] = t.Function
+		}
+		geminiTools = append(geminiTools, GeminiTool{FunctionDeclarations: declarations})
+	}
+
+	reqBody := GeminiRequest{
+		Contents: geminiContents,
+		Tools:    geminiTools,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return Message{}, err
+	}
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.GeminiKey)
+	// If system instructions exist, they are often added differently or as a separate field in v1beta
+	// but for simplicity we often append them to the first user message or use the dedicated field if supported.
+	// Gemini 1.5 supports system_instruction field.
+	type AdvancedGeminiRequest struct {
+		GeminiRequest
+		SystemInstruction *GeminiContent `json:"system_instruction,omitempty"`
+	}
+
+	advReq := AdvancedGeminiRequest{GeminiRequest: reqBody}
+	if systemInstructions != "" {
+		advReq.SystemInstruction = &GeminiContent{
+			Parts: []GeminiPart{{Text: systemInstructions}},
+		}
+	}
+	jsonData, _ = json.Marshal(advReq)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return Message{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := g.HTTPClient.Do(req)
+	if err != nil {
+		return Message{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return Message{}, fmt.Errorf("Gemini API error %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var geminiResp GeminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+		return Message{}, err
+	}
+
+	if len(geminiResp.Candidates) == 0 {
+		return Message{}, fmt.Errorf("Gemini empty candidates")
+	}
+
+	resMsg := Message{Role: "assistant"}
+	modelContent := geminiResp.Candidates[0].Content
+	for _, p := range modelContent.Parts {
+		if p.Text != "" {
+			resMsg.Content += p.Text
+		}
+		if p.FunctionCall != nil {
+			args, _ := json.Marshal(p.FunctionCall.Args)
+			resMsg.ToolCalls = append(resMsg.ToolCalls, ToolCall{
+				ID:   p.FunctionCall.Name, // Gemini doesn't always provide a call ID in the same way, we use Name
+				Type: "function",
+				Function: ToolCallFunction{
+					Name:      p.FunctionCall.Name,
 					Arguments: string(args),
 				},
 			})
