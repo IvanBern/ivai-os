@@ -219,7 +219,7 @@ func main() {
 
 				// 4. Send to DeepSeek and loop until it stops requesting tools
 				for {
-					responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-chat") 
+					responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-v4-pro") 
 					if err != nil {
 						slog.Error("LLM Execution Failed", "error", err)
 						fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
