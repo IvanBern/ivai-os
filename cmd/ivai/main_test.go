@@ -184,8 +184,8 @@ func TestProcessTaskWithHistory(t *testing.T) {
 	dbPath := "test_hist_memory.db"
 	defer os.Remove(dbPath)
 	store, _ := memory.NewStore(dbPath)
-	store.SaveMessage("user", "u")
-	store.SaveMessage("assistant", "a")
+	store.SaveMessage("user", "u", "")
+	store.SaveMessage("assistant", "a", "")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := llm.OpenAIResponse{

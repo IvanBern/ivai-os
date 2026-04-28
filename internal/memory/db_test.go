@@ -16,7 +16,7 @@ func TestStore(t *testing.T) {
 	}
 
 	// 2. Save Message
-	err = store.SaveMessage("user", "hello ivai")
+	err = store.SaveMessage("user", "hello ivai", "")
 	if err != nil {
 		t.Errorf("failed to save message: %v", err)
 	}
