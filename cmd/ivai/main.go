@@ -188,10 +188,13 @@ func main() {
 				history, _ := dbStore.GetRecentMessages(10)
 
 				// 3. Construct the payload
+				homeDir, _ := os.UserHomeDir()
+				systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your persistent workspace is %s. You have a continuous memory and access to the local filesystem. Use your workspace for projects and data storage.", homeDir)
+
 				var payload []llm.Message
 				payload = append(payload, llm.Message{
 					Role:    "system",
-					Content: "You are Ivai, an advanced AI Operating System. You have a continuous memory and access to the local filesystem.",
+					Content: systemPrompt,
 				})
 				for _, msg := range history {
 					payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
