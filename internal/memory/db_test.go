@@ -35,3 +35,11 @@ func TestStore(t *testing.T) {
 		t.Errorf("expected 'hello ivai', got %s", messages[0].Content)
 	}
 }
+
+func TestNewStoreError(t *testing.T) {
+	// Trying to create a DB in a non-existent directory
+	_, err := NewStore("/non/existent/path/memory.db")
+	if err == nil {
+		t.Error("expected error for invalid path, got nil")
+	}
+}

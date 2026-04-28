@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -32,16 +33,29 @@ func main() {
 	slog.SetDefault(logger)
 	slog.Info("Ivai OS starting up...", "version", "0.1.0")
 
-	if err := godotenv.Load("/etc/ivai/.env"); err == nil {
-		slog.Info("Configuration loaded successfully from /etc/ivai/.env")
+	// Determine paths based on OS
+	envPath := "/etc/ivai/.env"
+	dbPath := "/etc/ivai/memory.db"
+	if runtime.GOOS == "darwin" {
+		envPath = ".env"
+		dbPath = "memory.db"
+	}
+
+	if err := godotenv.Load(envPath); err == nil {
+		slog.Info("Configuration loaded successfully", "path", envPath)
 	}
 
 	// 2. Setup Context and Channels
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	type taskWithResponder struct {
+		instruction string
+		responder   chan string
+	}
+
 	// This channel is Ivai's "ear". Both CLI and HTTP will send tasks here.
-	taskChan := make(chan string, 10)
+	taskChan := make(chan taskWithResponder, 10)
 
 	// 3. Start the HTTP Server (Background Goroutine)
 	mux := http.NewServeMux()
@@ -56,20 +70,40 @@ func main() {
 			return
 		}
 
-		// Send task to the central channel
-		taskChan <- req.Instruction
+		// Channel to receive the final response
+		respChan := make(chan string)
+		
+		// Send task to the central channel with a responder
+		go func() {
+			taskChan <- taskWithResponder{
+				instruction: req.Instruction,
+				responder:   respChan,
+			}
+		}()
 
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "task accepted"})
+		// Wait for the reasoning loop to finish
+		select {
+		case finalResponse := <-respChan:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"response": finalResponse})
+		case <-time.After(120 * time.Second): // 2 minute timeout for complex reasoning
+			http.Error(w, "Task processing timed out", http.StatusGatewayTimeout)
+		case <-r.Context().Done():
+			return
+		}
 	})
 
+	port := os.Getenv("IVAI_PORT")
+	if port == "" {
+		port = "8080"
+	}
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + port,
 		Handler: mux,
 	}
 
 	go func() {
-		slog.Info("HTTP Server listening on :8080")
+		slog.Info("HTTP Server listening", "port", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "err", err)
 		}
@@ -84,7 +118,7 @@ func main() {
 		for scanner.Scan() {
 			input := strings.TrimSpace(scanner.Text())
 			if input != "" {
-				taskChan <- input // Send task to the central channel
+				taskChan <- taskWithResponder{instruction: input} // No responder for REPL, prints to stdout
 			}
 			// Wait a moment for logs to print before re-prompting
 			time.Sleep(50 * time.Millisecond)
@@ -103,8 +137,8 @@ func main() {
 	gateway := llm.NewGateway(deepSeekKey, anthropicKey, geminiKey)
 
 	// Initialize the Persistent Memory Subsystem
-	slog.Info("Mounting persistent memory subsystem...")
-	dbStore, err := memory.NewStore("/etc/ivai/memory.db")
+	slog.Info("Mounting persistent memory subsystem...", "path", dbPath)
+	dbStore, err := memory.NewStore(dbPath)
 	if err != nil {
 		slog.Error("Failed to initialize memory database", "error", err)
 		os.Exit(1)
@@ -121,11 +155,14 @@ func main() {
 	// 5. The Main OS Event Loop
 	for {
 		select {
-		case task := <-taskChan:
+		case t := <-taskChan:
 			// Process tasks asynchronously
-			go func(t string) {
-				processTask(ctx, t, gateway, dbStore, wasmEngine)
-			}(task)
+			go func(task taskWithResponder) {
+				response := processTask(ctx, task.instruction, gateway, dbStore, wasmEngine)
+				if task.responder != nil {
+					task.responder <- response
+				}
+			}(t)
 
 		case <-ctx.Done():
 			slog.Info("Shutting down Ivai OS...")
@@ -149,7 +186,7 @@ func printPrompt() {
 	}
 }
 
-func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *memory.Store, wasmEngine *sandbox.WasmRuntime) {
+func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *memory.Store, wasmEngine *sandbox.WasmRuntime) string {
 	// 0. Determine which model to use (default to deepseek-v4-pro)
 	model := "deepseek-v4-pro"
 	if strings.Contains(strings.ToLower(t), "@claude") {
@@ -254,7 +291,8 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 
 	// 3. Construct the payload
 	homeDir, _ := os.UserHomeDir()
-	systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your persistent workspace is %s. You have a continuous memory and access to the local filesystem. Use your workspace for projects and data storage. You have 'git' installed and configured for version control. You also have an 'http_request' tool for network access.", homeDir)
+	cwd, _ := os.Getwd()
+	systemPrompt := fmt.Sprintf("You are Ivai, an advanced AI Operating System. Your home directory is %s. You are currently running in %s. Use your tools to interact with the filesystem. You have 'git' installed.", homeDir, cwd)
 
 	var payload []llm.Message
 	payload = append(payload, llm.Message{
@@ -271,7 +309,7 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 		if err != nil {
 			slog.Error("LLM Execution Failed", "error", err)
 			printPrompt()
-			return
+			return "Error: " + err.Error()
 		}
 		
 		// If there are no tool calls, it's a final text response. We are done!
@@ -282,11 +320,19 @@ func processTask(ctx context.Context, t string, gateway *llm.Gateway, dbStore *m
 				fmt.Printf("\n[Ivai] %s\n", responseMsg.Content)
 			}
 			printPrompt()
-			break // Exit the reasoning loop
+			return responseMsg.Content
 		}
 
 		// Otherwise, the LLM wants to execute tools.
-		slog.Info("Thinking...")
+		if responseMsg.ReasoningContent != "" {
+			if isatty.IsTerminal(os.Stdout.Fd()) {
+				fmt.Printf("\n[Thinking] %s\n", responseMsg.ReasoningContent)
+			} else {
+				slog.Info("Thinking", "reasoning", responseMsg.ReasoningContent)
+			}
+		} else {
+			slog.Info("Thinking...")
+		}
 		
 		// Append the LLM's tool request to history
 		payload = append(payload, responseMsg)

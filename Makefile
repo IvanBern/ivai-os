@@ -97,6 +97,11 @@ run:
 # 4. Do it all (Build -> Deploy -> Run)
 dev: deploy run
 
+# 5. Run locally on macOS
+run-local:
+	@echo "🍎 Waking up Ivai OS locally..."
+	go run cmd/ivai/main.go
+
 clean:
 	rm -f $(BINARY_NAME) $(CLI_NAME)
 	rm -rf $(TEST_RESULTS)

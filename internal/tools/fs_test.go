@@ -8,21 +8,26 @@ import (
 func TestFileOps(t *testing.T) {
 	path := "test_file.txt"
 	content := "hello world"
-	defer os.Remove(path)
 
-	// 1. Write
 	err := WriteFile(path, content)
 	if err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
+	defer os.Remove(path)
 
-	// 2. Read
-	readContent, err := ReadFile(path)
+	got, err := ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
 
-	if readContent != content {
-		t.Errorf("expected %s, got %s", content, readContent)
+	if got != content {
+		t.Errorf("expected %s, got %s", content, got)
+	}
+}
+
+func TestReadFileError(t *testing.T) {
+	_, err := ReadFile("non_existent_file_ivai.txt")
+	if err == nil {
+		t.Error("expected error for non-existent file, got nil")
 	}
 }

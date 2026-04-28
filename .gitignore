@@ -9,3 +9,5 @@
 *.log
 /test-results/
 .DS_Store
+ivai-local
+memory.db
