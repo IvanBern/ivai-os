@@ -44,7 +44,7 @@ type ToolCall struct {
 // chat messages don't break the API by sending null tool fields.
 type Message struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Content    string     `json:"content"`
 	Name       string     `json:"name,omitempty"`         // Used when returning tool results
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // Populated when LLM wants to use a tool
 	ToolCallID string     `json:"tool_call_id,omitempty"` // Used to link the result back to the call

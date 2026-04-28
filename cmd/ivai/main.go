@@ -110,7 +110,6 @@ func main() {
 	// Initialize the Wasm Execution Sandbox
 	slog.Info("Initializing Wazero execution sandbox...")
 	wasmEngine := sandbox.NewWasmRuntime()
-	_ = wasmEngine // Placeholder for future use when we implement plugin execution
 	slog.Info("Execution sandbox ready with strict millisecond timeouts")
 
 	slog.Info("Ivai OS is now running. Awaiting input via CLI or port 8080.")
@@ -166,6 +165,22 @@ func main() {
 							},
 						},
 					},
+					{
+						Type: "function",
+						Function: llm.FunctionDefinition{
+							Name:        "execute_wasm",
+							Description: "Executes a compiled WebAssembly (.wasm) binary in a secure, isolated sandbox with strict timeouts. Passes data via stdin and returns stdout.",
+							Parameters: map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"filepath":   map[string]interface{}{"type": "string", "description": "Absolute path to the .wasm file on disk"},
+									"payload":    map[string]interface{}{"type": "string", "description": "Data to send to the Wasm module via standard input (stdin)"},
+									"timeout_ms": map[string]interface{}{"type": "integer", "description": "Execution timeout in milliseconds (e.g., 1000)"},
+								},
+								"required": []string{"filepath", "payload", "timeout_ms"},
+							},
+						},
+					},
 				}
 
 				// 2. Save user prompt to memory
@@ -182,90 +197,83 @@ func main() {
 					payload = append(payload, llm.Message{Role: msg.Role, Content: msg.Content})
 				}
 
-				// 4. Send to DeepSeek (Now passing availableTools!)
-				responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-chat")
-				if err != nil {
-					slog.Error("LLM Execution Failed", "error", err)
-					fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
-					return
-				}
+				// 4. Send to DeepSeek and loop until it stops requesting tools
+				for {
+					responseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-chat") 
+					if err != nil {
+						slog.Error("LLM Execution Failed", "error", err)
+						fmt.Printf("\n[Ivai Error] %v\nIvai > ", err)
+						return
+					}
+					
+					// If there are no tool calls, it's a final text response. We are done!
+					if len(responseMsg.ToolCalls) == 0 {
+						slog.Info("Task completed", "response_length", len(responseMsg.Content))
+						dbStore.SaveMessage("assistant", responseMsg.Content)
+						fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
+						break // Exit the reasoning loop
+					}
 
-				// 5. Handle Tool Executions
-				if len(responseMsg.ToolCalls) > 0 {
-					// The LLM wants to take an action!
+					// Otherwise, the LLM wants to execute tools.
 					fmt.Printf("\n[Ivai System] Thinking...\n")
-
-					// Append the assistant's tool call request to the message history so the API knows what we are responding to
+					
+					// Append the LLM's tool request to history
 					payload = append(payload, responseMsg)
 
+					// Execute all requested tools
 					for _, toolCall := range responseMsg.ToolCalls {
 						slog.Info("Executing tool", "name", toolCall.Function.Name)
 						fmt.Printf("[Ivai Tool] Running: %s\n", toolCall.Function.Name)
-
+						
 						var toolResult string
 
-						// Route the tool call to the correct Go function
 						if toolCall.Function.Name == "read_file" {
-							var args struct {
-								Filepath string `json:"filepath"`
-							}
+							var args struct{ Filepath string `json:"filepath"` }
 							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-
 							content, err := tools.ReadFile(args.Filepath)
-							if err != nil {
-								toolResult = fmt.Sprintf("Error reading file: %v", err)
-							} else {
-								toolResult = content
-							}
+							if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = content }
+							
 						} else if toolCall.Function.Name == "write_file" {
 							var args struct {
 								Filepath string `json:"filepath"`
 								Content  string `json:"content"`
 							}
 							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-
 							err := tools.WriteFile(args.Filepath, args.Content)
-							if err != nil {
-								toolResult = fmt.Sprintf("Error writing file: %v", err)
-							} else {
-								toolResult = "File written successfully."
-							}
+							if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = "File written successfully." }
+							
 						} else if toolCall.Function.Name == "execute_command" {
+							var args struct{ Command string `json:"command"` }
+							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
+							output, err := tools.ExecuteCommand(args.Command)
+							if err != nil { toolResult = fmt.Sprintf("Error: %v", err) } else { toolResult = output }
+							
+						} else if toolCall.Function.Name == "execute_wasm" {
 							var args struct {
-								Command string `json:"command"`
+								Filepath  string `json:"filepath"`
+								Payload   string `json:"payload"`
+								TimeoutMs int    `json:"timeout_ms"`
 							}
 							json.Unmarshal([]byte(toolCall.Function.Arguments), &args)
-
-							output, err := tools.ExecuteCommand(args.Command)
+							
+							wasmBytes, err := os.ReadFile(args.Filepath)
 							if err != nil {
-								toolResult = fmt.Sprintf("Command execution failed: %v", err)
+								toolResult = fmt.Sprintf("Error reading Wasm file: %v", err)
 							} else {
-								toolResult = output
+								output, err := wasmEngine.Execute(context.Background(), wasmBytes, args.Payload, args.TimeoutMs)
+								if err != nil { toolResult = fmt.Sprintf("Sandbox error: %v", err) } else { toolResult = output }
 							}
 						}
 
-						// Append the result of the tool execution as a "tool" role message
+						// Append the tool result to the payload so the LLM can read it in the next loop iteration
 						payload = append(payload, llm.Message{
 							Role:       "tool",
 							Content:    toolResult,
 							ToolCallID: toolCall.ID,
 						})
 					}
-
-					// 6. Send the tool results back to the LLM to get the final conversational answer
-					finalResponseMsg, err := gateway.Chat(context.Background(), payload, availableTools, "deepseek-chat")
-					if err != nil {
-						slog.Error("LLM Final Response Failed", "error", err)
-						return
-					}
-
-					// Overwrite our responseMsg with the final answer
-					responseMsg = finalResponseMsg
+					// The loop continues, sending the updated payload back to DeepSeek...
 				}
-
-				// 7. Save the final textual response to memory and print it
-				dbStore.SaveMessage("assistant", responseMsg.Content)
-				fmt.Printf("\n[Ivai] %s\nIvai > ", responseMsg.Content)
 
 			}(task)
 
