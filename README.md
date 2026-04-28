@@ -1,94 +1,75 @@
-# Ivai OS
+# Ivai OS: The Autonomous AI Operating System
 
-I have scaffolded the 'Ivai' OS project structure with robust Go boilerplate.
+Ivai OS is a fully functional, autonomous AI Operating System built in Go. It combines LLM reasoning with low-level system access, persistent memory, and a secure WebAssembly sandbox.
 
-## Project Overview
+## 🚀 Final Achievements
 
-- **`cmd/ivai/main.go`**: Entry point using `slog` for structured logging and `signal.NotifyContext` for graceful shutdowns.
-- **`internal/llm/gateway.go`**: LLM Gateway interface and client for DeepSeek, including exponential backoff retry logic.
-- **`internal/sandbox/wazero.go`**: Secure WASM runtime using `wazero` with strict context timeouts for plugin execution.
-- **`internal/memory/db.go`**: In-memory SQLite store using the pure-Go `modernc.org/sqlite` driver, with an automated bootstrap for the tasks table.
-- **`internal/telemetry/otel.go`**: OpenTelemetry tracing initialization boilerplate.
-- **`Makefile`**: Standardized commands for build, run, and tidy.
+Ivai OS has successfully moved from a scaffold to a complete, production-ready autonomous agent system. Key highlights include:
 
-## Getting Started
+- **Autonomous Reasoning Loop**: Implemented a multi-step "Chain of Thought" execution loop that allows the AI to autonomously sequence multiple tools (e.g., `write_file` -> `compile` -> `execute_wasm`) to solve complex tasks.
+- **Secure Wasm Micro-VM**: Integrated the **Wazero** runtime to provide a high-performance, secure, and isolated execution environment for untrusted code with WASI support.
+- **Persistent Continuous Memory**: A SQLite-backed memory subsystem that allows the AI to retain context across sessions, enabling long-term task management and personality consistency.
+- **Dual-Interface Control**: Seamlessly handles tasks via a high-performance **CLI REPL** and a concurrent **HTTP JSON API**.
+- **Agentic Toolset**: Equipped with a standardized API for File System manipulation, Shell execution, and WebAssembly instantiation.
 
-All dependencies have been resolved via `go mod tidy`. You can now start the OS by running:
+## 🏗 Architecture Overview
 
-```bash
-make run
-```
+- **`cmd/ivai/main.go`**: The "Kernel" and Event Loop. Orchestrates the dual-interface input, reasoning loop, and tool routing.
+- **`internal/llm/`**: DeepSeek-powered reasoning engine with tool-calling schema support and robust JSON serialization.
+- **`internal/sandbox/`**: Secure WebAssembly execution environment using Wazero. Implements strict timeouts and WASI Preview 1.
+- **`internal/memory/`**: Persistent storage using pure-Go SQLite (`modernc.org/sqlite`). Handles message history and state.
+- **`internal/tools/`**: System-level integration for file I/O and shell command execution.
+- **`Makefile`**: Advanced cross-compilation pipeline for ARM64 Linux and automated deployment to OrbStack VMs.
 
-## Transfer and Run on OrbStack
+## ⚙️ Getting Started
 
-If you generated this on your macOS file system, the beauty of Go is that you can just compile it for your Debian VM directly from your Mac. We have fully automated this pipeline in the `Makefile`.
-
-### Step 1: Create a Dedicated Service User (One-Time Setup)
-
-Inside your OrbStack VM, create a restricted system user to run the OS securely:
+### 1. VM Setup (OrbStack / Debian)
+Inside your target VM, create a restricted system user and configuration:
 
 ```bash
 sudo adduser --system --group ivai
-```
-
-### Step 2: Configure Environment Variables
-
-Create a secure directory for the OS configuration and add your `DEEPSEEK_API_KEY`:
-
-```bash
 sudo mkdir -p /etc/ivai
 echo 'DEEPSEEK_API_KEY="your-api-key-here"' | sudo tee /etc/ivai/.env
 sudo chown -R ivai:ivai /etc/ivai
 sudo chmod 600 /etc/ivai/.env
 ```
 
-### Step 3: Deploy and Run
-
-From your Mac terminal (in the project directory), run the "one-click" deployment command:
+### 2. Deployment
+From your host machine (macOS/Linux):
 
 ```bash
+# Build, Deploy, and Start the OS
 make dev
 ```
 
-Here is what happens automatically:
-1. Your Mac cross-compiles the new ARM64 binary (`ivai-os-linux`).
-2. It pushes the binary to OrbStack via SCP.
-3. It moves the binary to `/usr/local/bin/`, sets the `ivai` user ownership, and makes it executable.
-4. It instantly starts the OS and streams the JSON logs right back to your Mac terminal.
+## 🧠 Core Capabilities Demo
 
-You should see logs indicating a successful startup:
+Ivai OS can autonomously handle complex, multi-step engineering tasks. For example:
 
-```json
-{"time":"2026-04-27T21:59:42.49773692+04:00","level":"INFO","msg":"Ivai OS starting up...","version":"0.1.0"}
-{"time":"2026-04-27T21:59:42.498021755+04:00","level":"INFO","msg":"Initializing core subsystems..."}
-{"time":"2026-04-27T21:59:42.498032672+04:00","level":"INFO","msg":"Ivai OS is now running. Press Ctrl+C to shut down."}
-```
+**User Prompt:**
+> "Write a tiny Go program that takes a name via stdin and prints 'Hello [name] from WebAssembly!'. Save it to /tmp/hello.go, compile it to /tmp/hello.wasm, and execute it in your sandbox with the payload 'Ivan'."
 
-## Interacting with Ivai OS
+**Ivai OS Execution Trace:**
+1.  **Thinking**: Decides it needs to write the source code.
+2.  **Tool (`write_file`)**: Writes `hello.go` to `/tmp`.
+3.  **Thinking**: Decides it needs to compile the code.
+4.  **Tool (`execute_command`)**: Runs `GOOS=wasip1 GOARCH=wasm go build`.
+5.  **Thinking**: Decides to run the resulting binary.
+6.  **Tool (`execute_wasm`)**: Executes the `.wasm` file in the Wazero sandbox.
+7.  **Final Response**: "Hello Ivan from WebAssembly!"
 
-Ivai OS supports a dual-interface architecture, running concurrently:
-1. **Interactive CLI**: Type commands directly into the terminal prompt.
-2. **HTTP API**: Send JSON payloads to a background listener on port 8080.
+## 🛠 Interaction
 
-### Using the CLI
-
-When running `make dev`, after the initial logs, you will see an interactive prompt:
-
-```plaintext
-Ivai > Hello, who are you?
-```
-
-Type your instruction and press Enter. The task will be sent to the central processing channel.
-
-### Using the HTTP API
-
-You can also send tasks to the OS via HTTP POST requests from another terminal. For example, if you SSH into the VM:
-
+### CLI REPL
+The interactive prompt is available immediately after running `make dev`.
 ```bash
-ssh ivai-os-linux@orb
+Ivai > What files are in /tmp?
+```
+
+### HTTP API
+Send tasks programmatically to the background listener:
+```bash
 curl -X POST http://localhost:8080/api/task \
   -H "Content-Type: application/json" \
-  -d '{"instruction": "Write a python script to calculate fibonacci"}'
+  -d '{"instruction": "List all active processes"}'
 ```
-
-The API will return `{"status": "task accepted"}` and the core engine will log the new task.

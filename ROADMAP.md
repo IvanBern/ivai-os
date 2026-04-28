@@ -1,24 +1,22 @@
 # The Ivai OS Roadmap
 
-## Phase 1.
+## ✅ Phase 1: Core Kernel & Foundation
+- [x] Scaffold project structure with robust Go boilerplate.
+- [x] Implement LLM Gateway for DeepSeek integration.
+- [x] Setup structured logging and graceful shutdown signals.
 
-## Phase 2.
+## ✅ Phase 2: System Capabilities
+- [x] **The Memory Subsystem**: Embedded SQLite database for persistent conversation history and task context.
+- [x] **The Execution Sandbox**: Secure Wazero WebAssembly runtime for isolated plugin execution.
+- [x] **The Agentic Tool Protocol**: Multi-step reasoning loop with support for `read_file`, `write_file`, `execute_command`, and `execute_wasm`.
 
-### 1. The Memory Subsystem (internal/memory/db.go) 
-We embed the pure-Go SQLite database so Ivai can store conversation history, remember past tasks, and maintain context across its event loop.
+## 🚀 Phase 3: Residency & Advanced Interaction
+- [ ] **The Daemon (Systemd)**: Implement a systemd service unit to make Ivai OS a permanent resident of the Debian VM. It will start automatically on boot and restart on failure.
+- [ ] **The Mac Client**: Develop a native macOS CLI (or web interface) that communicates with Ivai via the HTTP port 8080. This removes the need for SSH to assign tasks.
+- [ ] **Persistent Workspace**: Define a standard "Ivai Home" directory for the agent to manage its own projects and persistent data.
 
-### 2. The Execution Sandbox (internal/sandbox/wazero.go) 
-We integrate the wazero WebAssembly runtime so Ivai can safely execute compiled code plugins directly inside the core OS engine.
-
-## Phase 3.
-
-### 1. The Agentic Tool Protocol (Function Calling)
- DeepSeek V4 fully supports the OpenAI Tool Calling specification. Instead of just sending the conversation history, we send a JSON schema describing the tools Ivai has available (e.g., execute_wasm, write_file). When DeepSeek decides it needs to use a tool, it returns a special JSON payload instead of a text message. Our Go engine catches that payload, runs the local Go function, and feeds the result back to DeepSeek.
-
- ### Tools
-
- 1. File I/O (read_file / write_file): Allows Ivai to read its own Go source code and write new scripts.
-
-2. System Shell (execute_command): Allows Ivai to run commands like go build or make dev inside the Debian VM.
-
-3. The Sandbox (execute_wasm): Wires up the Wazero engine we just built so Ivai can execute compiled .wasm plugins safely.
+## 🛠 Phase 4: Advanced Tooling & Autonomy
+- [ ] **Git Integration**: Teach Ivai to use `git` so it can clone repositories, manage branches, and commit code autonomously.
+- [ ] **GitHub API Access**: Allow Ivai to read PRs, issues, and repository metadata to analyze and contribute to external codebases.
+- [ ] **Network Tooling**: Add tools for safe HTTP requests and network diagnostics.
+- [ ] **Sub-Agent Spawning**: Enable Ivai to spawn child processes or sandboxed "sub-agents" for parallel task execution.
