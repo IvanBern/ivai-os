@@ -38,6 +38,7 @@ install-test-tools:
 	@echo "🛠 Installing test reporting tools..."
 	go install github.com/jstemmer/go-junit-report/v2@latest
 	go install github.com/jandelgado/gcov2lcov@latest
+	npm install -g junit-viewer
 
 test-reports:
 	@echo "📊 Generating test reports..."
@@ -49,7 +50,13 @@ test-reports:
 	else \
 		echo "⚠️ go-junit-report not found, skipping JUnit XML generation. Run 'make install-test-tools'."; \
 	fi
-	# Generate HTML report
+	# Generate HTML Test Report
+	@if command -v junit-viewer > /dev/null; then \
+		junit-viewer --results=$(TEST_RESULTS)/junit.xml --save=$(TEST_RESULTS)/report.html; \
+	else \
+		echo "⚠️ junit-viewer not found, skipping HTML test report generation. Run 'make install-test-tools'."; \
+	fi
+	# Generate HTML coverage report
 	go tool cover -html=$(TEST_RESULTS)/coverage.out -o $(TEST_RESULTS)/coverage.html
 	# Generate LCOV
 	@if command -v gcov2lcov > /dev/null; then \
