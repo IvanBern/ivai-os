@@ -977,17 +977,20 @@ func executeSwarmDeploy(argsJSON string) (string, error) {
 }
 
 func executeSwarmDispatch(argsJSON string) (string, error) {
-	var a struct{ Worker, Task string `json:"worker,instruction"` }
+	var a struct {
+		Worker      string `json:"worker"`
+		Instruction string `json:"instruction"`
+	}
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
-		fmt.Sprintf(`{"instruction":%q}`, a.Task),
-		map[string]string{"Content-Type": "application/json"})
+	return callVMBridge("/vm/dispatch", map[string]string{"worker": a.Worker, "instruction": a.Instruction})
 }
 
 func executeSwarmGather(argsJSON string) (string, error) {
-	var a struct{ Worker string `json:"worker"` }
+	var a struct {
+		Worker string `json:"worker"`
+	}
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
+	return callVMBridge("/vm/gather", map[string]string{"worker": a.Worker})
 }
 
 func executeSwarmStatus(argsJSON string) (string, error) {
