@@ -94,6 +94,9 @@ func main() {
 }
 
 func resolvePaths() (envPath, dbPath string) {
+	if dir := os.Getenv("IVAI_DATA_DIR"); dir != "" {
+		return dir + "/.env", dir + "/memory.db"
+	}
 	if runtime.GOOS == "darwin" {
 		return ".env", "memory.db"
 	}
