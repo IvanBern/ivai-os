@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -50,6 +51,9 @@ func NewStore(dbPath string) (*Store, error) {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	-- TODO: Add vector index for efficient similarity search (e.g., sqlite-vss or pgvector).
+	-- Currently embeddings are stored as JSON BLOBs and loaded entirely into memory for
+	-- cosine similarity scoring. This scales poorly beyond ~1000 embeddings.
 	CREATE TABLE IF NOT EXISTS embeddings (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		source TEXT NOT NULL DEFAULT '',
@@ -245,12 +249,12 @@ func scoreAndRank(queryEmb []float64, candidates []candidate, limit int) []Embed
 	return results
 }
 
+// sortScoredBySimilarity sorts scored results in descending order by similarity.
+// Uses stdlib sort.Slice with O(n log n) complexity.
 func sortScoredBySimilarity(scored []scoredResult) {
-	for i := 1; i < len(scored); i++ {
-		for j := i; j > 0 && scored[j].similarity > scored[j-1].similarity; j-- {
-			scored[j], scored[j-1] = scored[j-1], scored[j]
-		}
-	}
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].similarity > scored[j].similarity
+	})
 }
 
 func cosineSimilarity(a, b []float64) float64 {
