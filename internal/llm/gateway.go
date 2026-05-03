@@ -65,11 +65,11 @@ type OpenAIResponse struct {
 type AnthropicContent struct {
 	Type      string                 `json:"type"`
 	Text      string                 `json:"text,omitempty"`
-	ID        string                 `json:"id,omitempty"`        // tool_use id
-	Name      string                 `json:"name,omitempty"`      // tool_use name
-	Input     map[string]interface{} `json:"input,omitempty"`     // tool_use input
+	ID        string                 `json:"id,omitempty"`          // tool_use id
+	Name      string                 `json:"name,omitempty"`        // tool_use name
+	Input     map[string]interface{} `json:"input,omitempty"`       // tool_use input
 	ToolUseID string                 `json:"tool_use_id,omitempty"` // tool_result tool_use_id
-	Content   string                 `json:"content,omitempty"`    // tool_result content
+	Content   string                 `json:"content,omitempty"`     // tool_result content
 }
 
 type AnthropicMessage struct {
@@ -142,9 +142,9 @@ type Gateway struct {
 	HTTPClient   *http.Client
 
 	// Base URLs for testing
-	DeepSeekURL    string
-	AnthropicURL   string
-	GeminiURL      string
+	DeepSeekURL  string
+	AnthropicURL string
+	GeminiURL    string
 }
 
 func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
@@ -171,6 +171,44 @@ func (g *Gateway) Chat(ctx context.Context, messages []Message, tools []Tool, mo
 	return g.chatDeepSeek(ctx, messages, tools, model)
 }
 
+type providerCall struct {
+	url      string
+	body     interface{}
+	headers  map[string]string
+	provider string
+	target   interface{}
+}
+
+// doProviderRequest marshals reqBody, POSTs to url with headers, checks status, and decodes into target.
+func (g *Gateway) doProviderRequest(ctx context.Context, c providerCall) error {
+	jsonData, err := json.Marshal(c.body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := g.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s API error %d: %s", c.provider, resp.StatusCode, string(bodyBytes))
+	}
+
+	return json.NewDecoder(resp.Body).Decode(c.target)
+}
+
 func (g *Gateway) chatDeepSeek(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
 	reqBody := OpenAIRequest{
 		Model:    model,
@@ -178,32 +216,14 @@ func (g *Gateway) chatDeepSeek(ctx context.Context, messages []Message, tools []
 		Tools:    tools,
 	}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return Message{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.DeepSeekURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return Message{}, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.DeepSeekKey)
-
-	resp, err := g.HTTPClient.Do(req)
-	if err != nil {
-		return Message{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return Message{}, fmt.Errorf("DeepSeek API error %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
 	var openAIResp OpenAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
+	if err := g.doProviderRequest(ctx, providerCall{
+		url:      g.DeepSeekURL,
+		body:     reqBody,
+		headers:  map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + g.DeepSeekKey},
+		provider: "DeepSeek",
+		target:   &openAIResp,
+	}); err != nil {
 		return Message{}, err
 	}
 
@@ -214,109 +234,66 @@ func (g *Gateway) chatDeepSeek(ctx context.Context, messages []Message, tools []
 	return openAIResp.Choices[0].Message, nil
 }
 
-func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
-	var systemPrompt string
-	var anthropicMessages []AnthropicMessage
+// --- Anthropic translation ---
 
-	// Translate Ivai messages to Anthropic format
+func translateToAnthropic(messages []Message) (systemPrompt string, result []AnthropicMessage) {
 	for _, m := range messages {
-		if m.Role == "system" {
+		switch {
+		case m.Role == "system":
 			systemPrompt = m.Content
-			continue
+		case m.Role == "tool":
+			appendToolResultAnthropic(&result, m)
+		default:
+			result = append(result, anthropicFromMessage(m))
 		}
-
-		if m.Role == "tool" {
-			if len(anthropicMessages) > 0 && anthropicMessages[len(anthropicMessages)-1].Role == "user" {
-				anthropicMessages[len(anthropicMessages)-1].Content = append(anthropicMessages[len(anthropicMessages)-1].Content, AnthropicContent{
-					Type:      "tool_result",
-					ToolUseID: m.ToolCallID,
-					Content:   m.Content,
-				})
-			} else {
-				anthropicMessages = append(anthropicMessages, AnthropicMessage{
-					Role: "user",
-					Content: []AnthropicContent{
-						{
-							Type:      "tool_result",
-							ToolUseID: m.ToolCallID,
-							Content:   m.Content,
-						},
-					},
-				})
-			}
-			continue
-		}
-
-		am := AnthropicMessage{Role: m.Role}
-		if len(m.ToolCalls) > 0 {
-			if m.Content != "" {
-				am.Content = append(am.Content, AnthropicContent{Type: "text", Text: m.Content})
-			}
-			for _, tc := range m.ToolCalls {
-				var input map[string]interface{}
-				json.Unmarshal([]byte(tc.Function.Arguments), &input)
-				am.Content = append(am.Content, AnthropicContent{
-					Type:  "tool_use",
-					ID:    tc.ID,
-					Name:  tc.Function.Name,
-					Input: input,
-				})
-			}
-		} else {
-			am.Content = []AnthropicContent{{Type: "text", Text: m.Content}}
-		}
-		anthropicMessages = append(anthropicMessages, am)
 	}
+	return
+}
 
-	anthropicTools := make([]AnthropicTool, len(tools))
+func appendToolResultAnthropic(result *[]AnthropicMessage, m Message) {
+	content := AnthropicContent{Type: "tool_result", ToolUseID: m.ToolCallID, Content: m.Content}
+	msgs := *result
+	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "user" {
+		msgs[len(msgs)-1].Content = append(msgs[len(msgs)-1].Content, content)
+	} else {
+		*result = append(msgs, AnthropicMessage{Role: "user", Content: []AnthropicContent{content}})
+	}
+}
+
+func anthropicFromMessage(m Message) AnthropicMessage {
+	am := AnthropicMessage{Role: m.Role}
+	if len(m.ToolCalls) == 0 {
+		am.Content = []AnthropicContent{{Type: "text", Text: m.Content}}
+		return am
+	}
+	if m.Content != "" {
+		am.Content = append(am.Content, AnthropicContent{Type: "text", Text: m.Content})
+	}
+	for _, tc := range m.ToolCalls {
+		var input map[string]interface{}
+		json.Unmarshal([]byte(tc.Function.Arguments), &input)
+		am.Content = append(am.Content, AnthropicContent{
+			Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: input,
+		})
+	}
+	return am
+}
+
+func translateToolsToAnthropic(tools []Tool) []AnthropicTool {
+	out := make([]AnthropicTool, len(tools))
 	for i, t := range tools {
-		anthropicTools[i] = AnthropicTool{
+		out[i] = AnthropicTool{
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
 			InputSchema: t.Function.Parameters,
 		}
 	}
+	return out
+}
 
-	reqBody := AnthropicRequest{
-		Model:     model,
-		Messages:  anthropicMessages,
-		System:    systemPrompt,
-		MaxTokens: 4096,
-		Tools:     anthropicTools,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return Message{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.AnthropicURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return Message{}, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", g.AnthropicKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := g.HTTPClient.Do(req)
-	if err != nil {
-		return Message{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return Message{}, fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var anthropicResp AnthropicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
-		return Message{}, err
-	}
-
+func parseAnthropicResponse(resp AnthropicResponse) Message {
 	resMsg := Message{Role: "assistant"}
-	for _, c := range anthropicResp.Content {
+	for _, c := range resp.Content {
 		if c.Type == "text" {
 			resMsg.Content += c.Text
 		} else if c.Type == "tool_use" {
@@ -331,126 +308,104 @@ func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools [
 			})
 		}
 	}
-
-	return resMsg, nil
+	return resMsg
 }
 
-func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
-	var geminiContents []GeminiContent
-	var systemInstructions string
+func (g *Gateway) chatAnthropic(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
+	systemPrompt, anthropicMessages := translateToAnthropic(messages)
 
-	// Gemini separates system instructions from contents
+	reqBody := AnthropicRequest{
+		Model:     model,
+		Messages:  anthropicMessages,
+		System:    systemPrompt,
+		MaxTokens: 4096,
+		Tools:     translateToolsToAnthropic(tools),
+	}
+
+	var anthropicResp AnthropicResponse
+	if err := g.doProviderRequest(ctx, providerCall{
+		url:      g.AnthropicURL,
+		body:     reqBody,
+		headers:  map[string]string{"Content-Type": "application/json", "x-api-key": g.AnthropicKey, "anthropic-version": "2023-06-01"},
+		provider: "Anthropic",
+		target:   &anthropicResp,
+	}); err != nil {
+		return Message{}, err
+	}
+
+	return parseAnthropicResponse(anthropicResp), nil
+}
+
+// --- Gemini translation ---
+
+func translateToGemini(messages []Message) (systemInstructions string, result []GeminiContent) {
 	for _, m := range messages {
-		if m.Role == "system" {
+		switch {
+		case m.Role == "system":
 			systemInstructions = m.Content
-			continue
+		case m.Role == "tool":
+			result = append(result, geminiFromToolResult(m))
+		case len(m.ToolCalls) > 0:
+			result = append(result, geminiFromToolCalls(m)...)
+		default:
+			result = append(result, geminiFromText(m))
 		}
+	}
+	return
+}
 
-		role := m.Role
-		if role == "assistant" {
-			role = "model"
-		}
+func geminiFromToolResult(m Message) GeminiContent {
+	return GeminiContent{
+		Role: "function",
+		Parts: []GeminiPart{{
+			FunctionResponse: &GeminiFunctionResponse{
+				Name:     m.Name,
+				Response: map[string]interface{}{"content": m.Content},
+			},
+		}},
+	}
+}
 
-		part := GeminiPart{}
-		if m.Role == "tool" {
-			role = "function"
-			part.FunctionResponse = &GeminiFunctionResponse{
-				Name: m.Name,
-				Response: map[string]interface{}{
-					"content": m.Content,
-				},
-			}
-		} else if len(m.ToolCalls) > 0 {
-			// Model requesting tool use
-			role = "model"
-			for _, tc := range m.ToolCalls {
-				var args map[string]interface{}
-				json.Unmarshal([]byte(tc.Function.Arguments), &args)
-				geminiContents = append(geminiContents, GeminiContent{
-					Role: role,
-					Parts: []GeminiPart{{
-						FunctionCall: &GeminiFunctionCall{
-							Name: tc.Function.Name,
-							Args: args,
-						},
-					}},
-				})
-			}
-			continue
-		} else {
-			part.Text = m.Content
-		}
-
-		geminiContents = append(geminiContents, GeminiContent{
-			Role:  role,
-			Parts: []GeminiPart{part},
+func geminiFromToolCalls(m Message) []GeminiContent {
+	var out []GeminiContent
+	for _, tc := range m.ToolCalls {
+		var args map[string]interface{}
+		json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		out = append(out, GeminiContent{
+			Role: "model",
+			Parts: []GeminiPart{{
+				FunctionCall: &GeminiFunctionCall{Name: tc.Function.Name, Args: args},
+			}},
 		})
 	}
+	return out
+}
 
-	geminiTools := []GeminiTool{}
-	if len(tools) > 0 {
-		declarations := make([]FunctionDefinition, len(tools))
-		for i, t := range tools {
-			declarations[i] = t.Function
-		}
-		geminiTools = append(geminiTools, GeminiTool{FunctionDeclarations: declarations})
+func geminiFromText(m Message) GeminiContent {
+	role := m.Role
+	if role == "assistant" {
+		role = "model"
 	}
-
-	reqBody := GeminiRequest{
-		Contents: geminiContents,
-		Tools:    geminiTools,
+	return GeminiContent{
+		Role:  role,
+		Parts: []GeminiPart{{Text: m.Content}},
 	}
+}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return Message{}, err
+func translateToolsToGemini(tools []Tool) []GeminiTool {
+	if len(tools) == 0 {
+		return nil
 	}
-
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", g.GeminiURL, model, g.GeminiKey)
-	// If system instructions exist, they are often added differently or as a separate field in v1beta
-	// but for simplicity we often append them to the first user message or use the dedicated field if supported.
-	// Gemini 1.5 supports system_instruction field.
-	type AdvancedGeminiRequest struct {
-		GeminiRequest
-		SystemInstruction *GeminiContent `json:"system_instruction,omitempty"`
+	declarations := make([]FunctionDefinition, len(tools))
+	for i, t := range tools {
+		declarations[i] = t.Function
 	}
+	return []GeminiTool{{FunctionDeclarations: declarations}}
+}
 
-	advReq := AdvancedGeminiRequest{GeminiRequest: reqBody}
-	if systemInstructions != "" {
-		advReq.SystemInstruction = &GeminiContent{
-			Parts: []GeminiPart{{Text: systemInstructions}},
-		}
-	}
-	jsonData, _ = json.Marshal(advReq)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return Message{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := g.HTTPClient.Do(req)
-	if err != nil {
-		return Message{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return Message{}, fmt.Errorf("Gemini API error %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var geminiResp GeminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
-		return Message{}, err
-	}
-
-	if len(geminiResp.Candidates) == 0 {
-		return Message{}, fmt.Errorf("Gemini empty candidates")
-	}
-
+func parseGeminiResponse(resp GeminiResponse) Message {
 	resMsg := Message{Role: "assistant"}
-	modelContent := geminiResp.Candidates[0].Content
+	modelContent := resp.Candidates[0].Content
 	for _, p := range modelContent.Parts {
 		if p.Text != "" {
 			resMsg.Content += p.Text
@@ -458,7 +413,7 @@ func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []To
 		if p.FunctionCall != nil {
 			args, _ := json.Marshal(p.FunctionCall.Args)
 			resMsg.ToolCalls = append(resMsg.ToolCalls, ToolCall{
-				ID:   p.FunctionCall.Name, // Gemini doesn't always provide a call ID in the same way, we use Name
+				ID:   p.FunctionCall.Name,
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      p.FunctionCall.Name,
@@ -467,6 +422,45 @@ func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []To
 			})
 		}
 	}
+	return resMsg
+}
 
-	return resMsg, nil
+func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
+	systemInstructions, geminiContents := translateToGemini(messages)
+
+	reqBody := GeminiRequest{
+		Contents: geminiContents,
+		Tools:    translateToolsToGemini(tools),
+	}
+
+	type advancedGeminiRequest struct {
+		GeminiRequest
+		SystemInstruction *GeminiContent `json:"system_instruction,omitempty"`
+	}
+
+	advReq := advancedGeminiRequest{GeminiRequest: reqBody}
+	if systemInstructions != "" {
+		advReq.SystemInstruction = &GeminiContent{
+			Parts: []GeminiPart{{Text: systemInstructions}},
+		}
+	}
+
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", g.GeminiURL, model, g.GeminiKey)
+
+	var geminiResp GeminiResponse
+	if err := g.doProviderRequest(ctx, providerCall{
+		url:      url,
+		body:     advReq,
+		headers:  map[string]string{"Content-Type": "application/json"},
+		provider: "Gemini",
+		target:   &geminiResp,
+	}); err != nil {
+		return Message{}, err
+	}
+
+	if len(geminiResp.Candidates) == 0 {
+		return Message{}, fmt.Errorf("Gemini empty candidates")
+	}
+
+	return parseGeminiResponse(geminiResp), nil
 }

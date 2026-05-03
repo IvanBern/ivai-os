@@ -2,7 +2,7 @@
 
 ## ✅ Phase 1: Core Kernel & Foundation
 - [x] Scaffold project structure with robust Go boilerplate.
-- [x] Implement LLM Gateway for DeepSeek integration.
+- [x] Implement LLM Gateway for DeepSeek, Anthropic, and Gemini integration.
 - [x] Setup structured logging and graceful shutdown signals.
 
 ## ✅ Phase 2: System Capabilities
@@ -45,7 +45,9 @@
 - [ ] **Self-Modification Loop**: Enable Ivai to branch its own source code, implement features, write unit tests, compile, and submit PRs for human review.
 
 ## 📊 Phase 8: Observability
-- [ ] **OpenTelemetry (OTel)**: Instrument the daemon with spans for visual waterfall charts of reasoning loops, sandbox execution times, and tool call sequencing.
+- [x] **OpenTelemetry Tracer**: Initialized and wired into the reasoning loop and tool execution (foundation for exporters).
+- [ ] **OTel Exporters**: Add Jaeger, OTLP, or stdout exporters for visual waterfall charts.
+- [ ] **Span Enrichment**: Add attributes for model name, tool arguments, and timing data.
 
 ---
 

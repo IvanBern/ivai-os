@@ -10,14 +10,14 @@ Ivai OS has successfully moved from a scaffold to a complete, production-ready a
 - **Secure Wasm Micro-VM**: Integrated the **Wazero** runtime to provide a high-performance, secure, and isolated execution environment for untrusted code with WASI support.
 - **Persistent Continuous Memory**: A SQLite-backed memory subsystem that allows the AI to retain context across sessions, enabling long-term task management and personality consistency.
 - **Dual-Interface Control**: Seamlessly handles tasks via a high-performance **CLI REPL** and a concurrent **HTTP JSON API**.
-- **Agentic Toolset**: Equipped with a standardized API for File System manipulation, Shell execution, and WebAssembly instantiation.
+- **Agentic Toolset**: Equipped with a standardized API for File System manipulation, Shell execution, HTTP networking, and WebAssembly instantiation.
 
 ## 🏗 Architecture Overview
 
 Ivai OS follows a modular kernel-and-subsystem design. For a deep dive into the internal specifications, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 - **The Kernel**: A Go-based event loop orchestrating reasoning and tool routing.
-- **Cognitive Engine**: Multi-model (DeepSeek-V4-Pro, Claude 3.5 & Gemini 1.5 Pro) powered tool calling with autonomous multi-step reasoning. Swap models on the fly using `@claude`, `@gemini`, or `@deepseek`.
+- **Cognitive Engine**: Multi-model (DeepSeek-V4-Pro, Claude 3.5 Sonnet, Gemini 2.5 Pro & Deep Research) powered tool calling with autonomous multi-step reasoning. Swap models on the fly using `@claude`, `@gemini`, `@deepseek`, or `@research`.
 - **Execution Sandbox**: Secure WebAssembly (Wazero) micro-VM for untrusted code.
 - **Memory Subsystem**: Persistent SQLite storage for long-term context.
 - **Mac Client**: Remote control via the `ivaictl` CLI.
@@ -31,6 +31,9 @@ Inside your target VM, create a restricted system user and configuration:
 sudo adduser --system --group ivai
 sudo mkdir -p /etc/ivai
 echo 'DEEPSEEK_API_KEY="your-api-key-here"' | sudo tee /etc/ivai/.env
+# Optionally add Anthropic and Gemini keys:
+# echo 'ANTHROPIC_API_KEY="your-key"' | sudo tee -a /etc/ivai/.env
+# echo 'GEMINI_API_KEY="your-key"' | sudo tee -a /etc/ivai/.env
 sudo chown -R ivai:ivai /etc/ivai
 sudo chmod 600 /etc/ivai/.env
 ```
@@ -39,8 +42,11 @@ sudo chmod 600 /etc/ivai/.env
 From your host machine (macOS/Linux):
 
 ```bash
-# Build, Deploy, and Start the OS
+# Full deploy to VM
 make dev
+
+# Or run locally on macOS
+make run-local
 ```
 
 ## 🧠 Core Capabilities Demo

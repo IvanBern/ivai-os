@@ -1,3 +1,4 @@
+
 /bin/
 .env
 /ivai-os-linux
@@ -12,3 +13,4 @@
 ivai-local
 memory.db
 cmd/ivai/f
+.crush

@@ -22,39 +22,47 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader) error {
-	var instruction string
-
-	if len(args) > 1 {
-		instruction = strings.Join(args[1:], " ")
-	} else {
-		// Read from stdin
-		fmt.Println("Enter instruction for Ivai OS (Ctrl+D to finish):")
-		body, err := io.ReadAll(stdin)
-		if err != nil {
-			return fmt.Errorf("error reading stdin: %v", err)
-		}
-		instruction = strings.TrimSpace(string(body))
+	instruction, err := readInstruction(args, stdin)
+	if err != nil {
+		return err
 	}
-
 	if instruction == "" {
 		return fmt.Errorf("no instruction provided")
 	}
+	return sendTask(instruction)
+}
 
+func readInstruction(args []string, stdin io.Reader) (string, error) {
+	if len(args) > 1 {
+		return strings.Join(args[1:], " "), nil
+	}
+	fmt.Println("Enter instruction for Ivai OS (Ctrl+D to finish):")
+	body, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", fmt.Errorf("error reading stdin: %v", err)
+	}
+	return strings.TrimSpace(string(body)), nil
+}
+
+func buildAPIURL() string {
+	if url := os.Getenv("IVAI_API_URL"); url != "" {
+		return url
+	}
+	port := os.Getenv("IVAI_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	return fmt.Sprintf("http://localhost:%s/api/task", port)
+}
+
+func sendTask(instruction string) error {
 	reqBody := TaskRequest{Instruction: instruction}
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("error marshaling request: %v", err)
 	}
 
-	// We use localhost:8080 as the default, which works with OrbStack port mapping
-	apiURL := os.Getenv("IVAI_API_URL")
-	if apiURL == "" {
-		port := os.Getenv("IVAI_PORT")
-		if port == "" {
-			port = "8080"
-		}
-		apiURL = fmt.Sprintf("http://localhost:%s/api/task", port)
-	}
+	apiURL := buildAPIURL()
 
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -62,7 +70,12 @@ func run(args []string, stdin io.Reader) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
+	return handleResponse(resp)
+}
+
+func handleResponse(resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusOK:
 		var result struct {
 			Response string `json:"response"`
 		}
@@ -71,10 +84,10 @@ func run(args []string, stdin io.Reader) error {
 		}
 		fmt.Printf("\n[Ivai] %s\n", result.Response)
 		return nil
-	} else if resp.StatusCode == http.StatusAccepted {
+	case http.StatusAccepted:
 		fmt.Println("✅ Task accepted by Ivai OS (processing in background).")
 		return nil
-	} else {
+	default:
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("❌ Failed to send task. Status: %d, Response: %s", resp.StatusCode, string(body))
 	}

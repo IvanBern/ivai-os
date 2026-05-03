@@ -34,7 +34,12 @@ func TestProcessTask(t *testing.T) {
 	store, _ := memory.NewStore(dbPath)
 	wasmEngine := sandbox.NewWasmRuntime()
 
-	processTask(context.Background(), "hello", gateway, store, wasmEngine)
+	processTask(context.Background(), TaskInput{
+		Instruction: "hello",
+		Gateway:     gateway,
+		DBStore:     store,
+		WasmEngine:  wasmEngine,
+	})
 }
 
 func TestProcessTaskTools(t *testing.T) {
@@ -44,8 +49,6 @@ func TestProcessTaskTools(t *testing.T) {
 	wasmEngine := sandbox.NewWasmRuntime()
 
 	tools := []string{"read_file", "write_file", "execute_command", "http_request"}
-	// Note: execute_wasm is hard to test without a valid wasm file, so we'll skip or mock carefully if possible.
-	// But let's try to hit the branches.
 
 	for _, toolName := range tools {
 		t.Run(toolName, func(t *testing.T) {
@@ -54,10 +57,18 @@ func TestProcessTaskTools(t *testing.T) {
 				var resp llm.OpenAIResponse
 				if callCount == 0 {
 					args := "{}"
-					if toolName == "read_file" { args = `{"filepath":"f"}` }
-					if toolName == "write_file" { args = `{"filepath":"f", "content":"c"}` }
-					if toolName == "execute_command" { args = `{"command":"echo"}` }
-					if toolName == "http_request" { args = `{"method":"GET", "url":"http://localhost"}` }
+					if toolName == "read_file" {
+						args = `{"filepath":"f"}`
+					}
+					if toolName == "write_file" {
+						args = `{"filepath":"f", "content":"c"}`
+					}
+					if toolName == "execute_command" {
+						args = `{"command":"echo"}`
+					}
+					if toolName == "http_request" {
+						args = `{"method":"GET", "url":"http://localhost"}`
+					}
 
 					resp = llm.OpenAIResponse{
 						Choices: []struct {
@@ -96,7 +107,12 @@ func TestProcessTaskTools(t *testing.T) {
 
 			gateway := llm.NewGateway("k", "", "")
 			gateway.DeepSeekURL = server.URL
-			processTask(context.Background(), "run "+toolName, gateway, store, wasmEngine)
+			processTask(context.Background(), TaskInput{
+				Instruction: "run " + toolName,
+				Gateway:     gateway,
+				DBStore:     store,
+				WasmEngine:  wasmEngine,
+			})
 		})
 	}
 }
@@ -148,7 +164,12 @@ func TestProcessTaskWasm(t *testing.T) {
 
 	gateway := llm.NewGateway("k", "", "")
 	gateway.DeepSeekURL = server.URL
-	processTask(context.Background(), "run wasm", gateway, store, wasmEngine)
+	processTask(context.Background(), TaskInput{
+		Instruction: "run wasm",
+		Gateway:     gateway,
+		DBStore:     store,
+		WasmEngine:  wasmEngine,
+	})
 }
 
 func TestProcessTaskRouting(t *testing.T) {
@@ -176,7 +197,12 @@ func TestProcessTaskRouting(t *testing.T) {
 
 	tests := []string{"@claude", "@gemini", "@research", "@deepseek"}
 	for _, m := range tests {
-		processTask(context.Background(), m+" hi", gateway, store, wasmEngine)
+		processTask(context.Background(), TaskInput{
+			Instruction: m + " hi",
+			Gateway:     gateway,
+			DBStore:     store,
+			WasmEngine:  wasmEngine,
+		})
 	}
 }
 
@@ -202,7 +228,12 @@ func TestProcessTaskWithHistory(t *testing.T) {
 	gateway := llm.NewGateway("k", "", "")
 	gateway.DeepSeekURL = server.URL
 	wasmEngine := sandbox.NewWasmRuntime()
-	processTask(context.Background(), "q", gateway, store, wasmEngine)
+	processTask(context.Background(), TaskInput{
+		Instruction: "q",
+		Gateway:     gateway,
+		DBStore:     store,
+		WasmEngine:  wasmEngine,
+	})
 }
 
 func TestProcessTaskError(t *testing.T) {
@@ -218,5 +249,10 @@ func TestProcessTaskError(t *testing.T) {
 
 	gateway := llm.NewGateway("k", "", "")
 	gateway.DeepSeekURL = server.URL
-	processTask(context.Background(), "hi", gateway, store, wasmEngine)
+	processTask(context.Background(), TaskInput{
+		Instruction: "hi",
+		Gateway:     gateway,
+		DBStore:     store,
+		WasmEngine:  wasmEngine,
+	})
 }
