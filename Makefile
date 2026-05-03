@@ -1,8 +1,8 @@
 # Variables
 BINARY_NAME=ivai-os-linux
 CLI_NAME=ivaictl
-MAIN_PATH=cmd/ivai/main.go
-CLI_PATH=cmd/ivaictl/main.go
+MAIN_PATH=./cmd/ivai/
+CLI_PATH=./cmd/ivaictl/
 VM_TARGET=ivai-os-linux@orb
 BIN_DEST=/usr/local/bin/ivai-os
 TEST_RESULTS=test-results
@@ -105,7 +105,7 @@ dev: deploy run
 # 5. Run locally on macOS
 run-local:
 	@echo "🍎 Waking up Ivai OS locally..."
-	go run cmd/ivai/main.go
+	go run ./cmd/ivai/
 
 clean:
 	rm -f $(BINARY_NAME) $(CLI_NAME)
