@@ -592,3 +592,22 @@ func TestRegressionExtractModel(t *testing.T) {
 		}
 	}
 }
+
+func TestSwarmFunctionsCompile(t *testing.T) {
+	// Verify all swarm functions exist and parse args
+	_, _ = executeSwarmClone(`{"name":"test"}`)
+	_, _ = executeSwarmDeploy(`{"name":"test"}`)
+	_, _ = executeSwarmDispatch(`{"worker":"w","instruction":"hi"}`)
+	_, _ = executeSwarmGather(`{"worker":"w"}`)
+	_, _ = executeSwarmStatus(`{}`)
+	_, _ = executeSwarmStatus(`{"name":"test"}`)
+	_ = callVMBridge
+}
+
+func TestSwarmToolRegistryComplete(t *testing.T) {
+	for _, name := range []string{"swarm_clone","swarm_deploy","swarm_dispatch","swarm_gather","swarm_status"} {
+		if _, ok := toolRegistry[name]; !ok {
+			t.Errorf("swarm tool %q not in toolRegistry", name)
+		}
+	}
+}
