@@ -778,6 +778,23 @@ func executeListIssues(argsJSON string) (string, error) {
 	return tools.ExecuteCommand(cmd)
 }
 
+func dispatchSwarmTool(name, argsJSON string) (string, error) {
+	switch name {
+	case "swarm_clone":
+		return executeSwarmClone(argsJSON)
+	case "swarm_deploy":
+		return executeSwarmDeploy(argsJSON)
+	case "swarm_dispatch":
+		return executeSwarmDispatch(argsJSON)
+	case "swarm_gather":
+		return executeSwarmGather(argsJSON)
+	case "swarm_status":
+		return executeSwarmStatus(argsJSON)
+	default:
+		return fmt.Sprintf("Unknown swarm tool: %s", name), nil
+	}
+}
+
 func resultOrError(result string, err error) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -861,27 +878,11 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		output, err := executeUpdateWiki(tc.Function.Arguments)
 		return resultOrError(output, err)
 
-	case "swarm_clone":
-		output, err := executeSwarmClone(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "swarm_deploy":
-		output, err := executeSwarmDeploy(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "swarm_dispatch":
-		output, err := executeSwarmDispatch(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "swarm_gather":
-		output, err := executeSwarmGather(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "swarm_status":
-		output, err := executeSwarmStatus(tc.Function.Arguments)
-		return resultOrError(output, err)
-
 	default:
+		if strings.HasPrefix(tc.Function.Name, "swarm_") {
+			output, err := dispatchSwarmTool(tc.Function.Name, tc.Function.Arguments)
+			return resultOrError(output, err)
+		}
 		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 	}
 }
