@@ -528,6 +528,12 @@ func buildTools() []llm.Tool {
 				"limit":  strProp("Max issues to return (default: 10)"),
 			},
 			[]string{}),
+		define("update_wiki", "Updates a GitHub Wiki page by cloning the wiki repo, writing a markdown file, committing, and pushing. Provide page title and markdown content.",
+			map[string]any{
+				"page":    strProp("Wiki page title (creates page.md)"),
+				"content": strProp("Markdown content for the page"),
+			},
+			[]string{"page", "content"}),
 	}
 }
 
@@ -554,9 +560,6 @@ func buildPayload(dbStore *memory.Store, gateway *llm.Gateway) []llm.Message {
 }
 
 func injectRAGContext(payload []llm.Message, dbStore *memory.Store, gateway *llm.Gateway, history []memory.Message) []llm.Message {
-	if !featureEnabled("rag") {
-		return payload
-	}
 	if len(history) == 0 {
 		return payload
 	}
@@ -824,6 +827,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		output, err := executeListIssues(tc.Function.Arguments)
 		return resultOrError(output, err)
 
+	case "update_wiki":
+		output, err := executeUpdateWiki(tc.Function.Arguments)
+		return resultOrError(output, err)
+
 	default:
 		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 	}
@@ -950,6 +957,18 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.St
 	json.NewEncoder(w).Encode(map[string]any{"embeddings": results})
 }
 
-func featureEnabled(name string) bool {
-	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
+func executeUpdateWiki(argsJSON string) (string, error) {
+	var args struct {
+		Page    string `json:"page"`
+		Content string `json:"content"`
+	}
+	json.Unmarshal([]byte(argsJSON), &args)
+	filename := args.Page + ".md"
+	cmd := fmt.Sprintf("cd /tmp && rm -rf ivai-wiki && git clone https://github.com/IvanBern/ivai-os.wiki.git ivai-wiki && cd ivai-wiki && cat > %s << 'WIKIEOF'\n%s\nWIKIEOF\n && git add %s && git commit -m 'update %s' && git push", filename, args.Content, filename, args.Page)
+	return tools.ExecuteCommand(cmd)
+}
+
+func shellQuote(s string) string {
+	q := fmt.Sprintf("%q", s)
+	return q
 }
