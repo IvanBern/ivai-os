@@ -534,6 +534,36 @@ func buildTools() []llm.Tool {
 				"content": strProp("Markdown content for the page"),
 			},
 			[]string{"page", "content"}),
+		define("swarm_clone", "Clones the ivai-os-linux VM to create a new worker VM. Provide a name for the new worker.",
+			map[string]any{
+				"name": strProp("Name for the new worker VM (e.g., ivai-worker-1)"),
+			},
+			[]string{"name"}),
+
+		define("swarm_deploy", "Deploys the latest Ivai binary to a worker VM and starts the service.",
+			map[string]any{
+				"name": strProp("Worker VM name"),
+			},
+			[]string{"name"}),
+
+		define("swarm_dispatch", "Sends a task to a worker VM for execution.",
+			map[string]any{
+				"worker":      strProp("Worker VM hostname or IP (e.g., 192.168.139.x)"),
+				"instruction": strProp("Task instruction to execute"),
+			},
+			[]string{"worker", "instruction"}),
+
+		define("swarm_gather", "Collects task results from a worker VM.",
+			map[string]any{
+				"worker": strProp("Worker VM hostname or IP"),
+			},
+			[]string{"worker"}),
+
+		define("swarm_status", "Checks status of a worker VM or lists all VMs if no name provided.",
+			map[string]any{
+				"name": strProp("Optional VM name. Leave empty to list all VMs."),
+			},
+			[]string{}),
 	}
 }
 
@@ -831,6 +861,26 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		output, err := executeUpdateWiki(tc.Function.Arguments)
 		return resultOrError(output, err)
 
+	case "swarm_clone":
+		output, err := executeSwarmClone(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "swarm_deploy":
+		output, err := executeSwarmDeploy(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "swarm_dispatch":
+		output, err := executeSwarmDispatch(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "swarm_gather":
+		output, err := executeSwarmGather(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "swarm_status":
+		output, err := executeSwarmStatus(tc.Function.Arguments)
+		return resultOrError(output, err)
+
 	default:
 		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 	}
@@ -974,4 +1024,46 @@ func shellQuote(s string) string {
 }
 func featureEnabled(name string) bool {
 	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
+}
+
+// --- Swarm Tools ---
+
+func callVMBridge(endpoint string, body map[string]string) (string, error) {
+	jsonBody, _ := json.Marshal(body)
+	return tools.HttpRequest("POST", "http://host.orb.internal:9877"+endpoint, string(jsonBody), map[string]string{"Content-Type": "application/json"})
+}
+
+func executeSwarmClone(argsJSON string) (string, error) {
+	var a struct{ Name string `json:"name"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return callVMBridge("/vm/clone", map[string]string{"name": a.Name})
+}
+
+func executeSwarmDeploy(argsJSON string) (string, error) {
+	var a struct{ Name string `json:"name"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return callVMBridge("/vm/deploy", map[string]string{"name": a.Name})
+}
+
+func executeSwarmDispatch(argsJSON string) (string, error) {
+	var a struct{ Worker, Task string `json:"worker,instruction"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
+		fmt.Sprintf(`{"instruction":%q}`, a.Task),
+		map[string]string{"Content-Type": "application/json"})
+}
+
+func executeSwarmGather(argsJSON string) (string, error) {
+	var a struct{ Worker string `json:"worker"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
+}
+
+func executeSwarmStatus(argsJSON string) (string, error) {
+	var a struct{ Name string `json:"name"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	if a.Name != "" {
+		return callVMBridge("/vm/status", map[string]string{"name": a.Name})
+	}
+	return callVMBridge("/vm/list", nil)
 }
