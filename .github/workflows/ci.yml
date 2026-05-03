@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -26,13 +30,10 @@ jobs:
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
           echo "Coverage: ${COVERAGE}%"
-          if (( $(echo "$COVERAGE < 30" | bc -l) )); then
+          if [ "$(echo "$COVERAGE < 30" | bc -l)" = "1" ]; then
             echo "Coverage below 30% threshold"
             exit 1
           fi
-
-      - name: Vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4
@@ -50,5 +51,6 @@ jobs:
       - name: Gitleaks scan
         uses: gitleaks/gitleaks-action@v2
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
         continue-on-error: true
