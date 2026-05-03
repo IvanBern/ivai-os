@@ -446,6 +446,9 @@ func translateToolsToGemini(tools []Tool) []GeminiTool {
 
 func parseGeminiResponse(resp GeminiResponse) Message {
 	resMsg := Message{Role: "assistant"}
+	if len(resp.Candidates) == 0 {
+		return resMsg
+	}
 	modelContent := resp.Candidates[0].Content
 	for _, p := range modelContent.Parts {
 		if p.Text != "" {

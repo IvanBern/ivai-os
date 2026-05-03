@@ -703,6 +703,7 @@ func appendToolResults(ctx context.Context, payload []llm.Message, toolCalls []l
 			Role:       "tool",
 			Content:    toolResult,
 			ToolCallID: tc.ID,
+			Name:       tc.Function.Name,
 		})
 	}
 	return payload
@@ -1128,7 +1129,9 @@ func executeSwarmSpawn(argsJSON string) (string, error) {
 		a.Port = "8081"
 	}
 	dataDir := "/tmp/ivai-" + a.Name
-	cmd := fmt.Sprintf("mkdir -p %s && cp /etc/ivai/.env %s/.env 2>/dev/null; IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, dataDir, dataDir, a.Port, a.Name, a.Port)
+	// Create a filtered .env with only worker-necessary vars (no API keys)
+	filterCmd := fmt.Sprintf("grep -E '^IVAI_(PORT|DATA_DIR)=' /etc/ivai/.env > %s/.env", dataDir)
+	cmd := fmt.Sprintf("mkdir -p %s && %s 2>/dev/null; IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, filterCmd, dataDir, a.Port, a.Name, a.Port)
 	out, err := tools.ExecuteCommand(cmd)
 	if err != nil {
 		return "", err
