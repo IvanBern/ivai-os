@@ -517,7 +517,7 @@ func TestRegressionAllToolDispatch(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Function.Name] = true
 	}
-	expected := []string{"read_file", "write_file", "execute_command", "execute_wasm", "http_request", "github_pr", "code_health", "create_issue", "list_issues", "update_wiki", "swarm_clone", "swarm_deploy", "swarm_dispatch", "swarm_gather", "swarm_status"}
+	expected := []string{"read_file", "write_file", "execute_command", "execute_wasm", "http_request", "github_pr", "code_health", "create_issue", "list_issues", "update_wiki", "swarm_clone", "swarm_deploy", "swarm_dispatch", "swarm_gather", "swarm_status", "swarm_spawn", "swarm_kill"}
 	for _, name := range expected {
 		if !toolNames[name] {
 			t.Errorf("tool %q not found in buildTools()", name)
