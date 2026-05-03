@@ -25,3 +25,29 @@ You must NOT modify your own running source code directly. Instead, use this wor
 6. Never modify files in your own working directory's cmd/ or internal/ — those are live
 
 This keeps you safe: bad code stays in the sandbox, good code gets reviewed before deployment.
+
+## PR Conventions
+
+When creating a Pull Request via the `github_pr` tool:
+
+1. **Title** follows conventional commits: `<type>(<scope>): <description>` — imperative mood (e.g., "add" not "adds")
+2. **Body** explains **why** the change matters, based on actual file diffs not guesses
+3. Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
+4. Before creating a PR, review what you actually changed — run `git diff --stat` to verify
+5. Description format: summary line, then bullet points for key changes, then test plan
+
+Example:
+```
+## Summary
+Add semantic memory — Ivai can now find relevant past context by meaning.
+
+## Changes
+- Embedding generation via DeepSeek API
+- Cosine similarity search in SQLite
+- Auto-embed every task instruction
+- RAG context injection before each LLM call
+
+## Test plan
+- Verified embeddings stored and searchable
+- RAG context appears in LLM prompt
+```
