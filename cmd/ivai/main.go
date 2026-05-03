@@ -478,13 +478,14 @@ func buildTools() []llm.Tool {
 			},
 			[]string{"method", "url"}),
 
-		define("github_pr", "Creates a GitHub Pull Request from the current branch. Uses the gh CLI (must be authenticated). Provide title, body, and optionally a base branch.",
+		define("github_pr", "Creates a GitHub Pull Request from a repo directory. Uses the gh CLI (must be authenticated). Provide title, body, repo path, and optionally a base branch.",
 			map[string]any{
 				"title": strProp("Pull request title"),
 				"body":  strProp("Pull request description"),
 				"base":  strProp("Target branch (default: main)"),
+				"repo":  strProp("Path to the git repository (e.g., /tmp/ivai-sandbox)"),
 			},
-			[]string{"title", "body"}),
+			[]string{"title", "body", "repo"}),
 	}
 }
 
@@ -599,13 +600,18 @@ func executeGitHubPR(argsJSON string) (string, error) {
 		Title string `json:"title"`
 		Body  string `json:"body"`
 		Base  string `json:"base"`
+		Repo  string `json:"repo"`
 	}
 	json.Unmarshal([]byte(argsJSON), &args)
 	base := args.Base
 	if base == "" {
 		base = "main"
 	}
-	return tools.ExecuteCommand(fmt.Sprintf("gh pr create --title %q --body %q --base %s", args.Title, args.Body, base))
+	cmd := fmt.Sprintf("gh pr create --title %q --body %q --base %s", args.Title, args.Body, base)
+	if args.Repo != "" {
+		cmd = fmt.Sprintf("cd %s && %s", args.Repo, cmd)
+	}
+	return tools.ExecuteCommand(cmd)
 }
 
 func resultOrError(result string, err error) string {
