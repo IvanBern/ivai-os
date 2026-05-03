@@ -122,3 +122,9 @@ stop:
 	@pkill -f "cmd/ivai" 2>/dev/null || true
 	@lsof -ti:8080 -ti:8081 2>/dev/null | xargs kill 2>/dev/null || true
 	@echo "✅ Ivai OS stopped."
+
+.PHONY: reset
+reset:
+	@echo "🧹 Resetting Ivai OS memory..."
+	@ssh $(VM_TARGET) "sudo systemctl stop ivai && sudo rm -f /etc/ivai/memory.db && sudo systemctl start ivai"
+	@echo "✅ Memory reset. Ivai has a clean slate."
