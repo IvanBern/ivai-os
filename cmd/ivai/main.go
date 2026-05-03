@@ -193,6 +193,9 @@ func startHTTPServer(port string, taskChan chan<- taskWithResponder, gateway *ll
 	mux.HandleFunc("/api/system", func(w http.ResponseWriter, r *http.Request) {
 		handleSystem(w, r, dbStore)
 	})
+	mux.HandleFunc("/api/embeddings", func(w http.ResponseWriter, r *http.Request) {
+		handleEmbeddings(w, r, dbStore)
+	})
 
 	// Serve embedded web dashboard
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -843,12 +846,19 @@ func handleTaskResults(w http.ResponseWriter, r *http.Request, dbStore *memory.S
 	})
 }
 
+func parseQueryInt(s string, defaultVal int, validate func(int) bool) int {
+	v, err := strconv.Atoi(s)
+	if err != nil || !validate(v) {
+		return defaultVal
+	}
+	return v
+}
+
 func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
 	w.Header().Set("Content-Type", "application/json")
 	embCount, _ := dbStore.CountEmbeddings()
 	msgCount, _ := dbStore.CountMessages()
 	stats, _ := dbStore.GetTaskStats()
-
 	json.NewEncoder(w).Encode(map[string]any{
 		"system_prompt":    systemPromptTemplate,
 		"embeddings_count": embCount,
@@ -857,10 +867,16 @@ func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store)
 	})
 }
 
-func parseQueryInt(s string, defaultVal int, validate func(int) bool) int {
-	v, err := strconv.Atoi(s)
-	if err != nil || !validate(v) {
-		return defaultVal
+func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	w.Header().Set("Content-Type", "application/json")
+	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
+	results, err := dbStore.GetRecentEmbeddings(limit)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
 	}
-	return v
+	if results == nil {
+		results = []memory.EmbeddingResult{}
+	}
+	json.NewEncoder(w).Encode(map[string]any{"embeddings": results})
 }
