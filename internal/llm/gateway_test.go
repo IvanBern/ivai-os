@@ -258,3 +258,12 @@ func TestGatewayErrorPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestDoProviderRequestConnectionRefused(t *testing.T) {
+	g := NewGateway("key", "", "")
+	g.DeepSeekURL = "http://127.0.0.1:1"
+	_, err := g.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, "deepseek-chat")
+	if err == nil {
+		t.Error("expected error for connection refused")
+	}
+}

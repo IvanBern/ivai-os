@@ -14,7 +14,17 @@ Ivai OS has successfully moved from a scaffold to a complete, production-ready a
 
 ## 🏗 Architecture Overview
 
-Ivai OS follows a modular kernel-and-subsystem design. For a deep dive into the internal specifications, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+Ivai OS follows a modular kernel-and-subsystem design. The `cmd/ivai/` source is split across five files by responsibility:
+
+| File | Responsibility |
+|---|---|
+| `main.go` | Minimal startup, HTTP handlers, CLI REPL, event loop |
+| `process.go` | Task processing, reasoning loop, RAG payload builder |
+| `tools.go` | Tool definitions (17 tools), dispatcher, result formatting |
+| `github_tools.go` | GitHub PR/issues/wiki and CodeScene executors |
+| `swarm.go` | VM worker lifecycle (clone/deploy/dispatch/kill) |
+
+For a deep dive into the internal specifications, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 - **The Kernel**: A Go-based event loop orchestrating reasoning and tool routing.
 - **Cognitive Engine**: Multi-model (DeepSeek-V4-Pro, Claude 3.5 Sonnet, Gemini 2.5 Pro & Deep Research) powered tool calling with autonomous multi-step reasoning. Swap models on the fly using `@claude`, `@gemini`, `@deepseek`, or `@research`.

@@ -20,12 +20,8 @@ import (
 	"github.com/IvanBern/ivai-os/internal/memory"
 	"github.com/IvanBern/ivai-os/internal/sandbox"
 	"github.com/IvanBern/ivai-os/internal/telemetry"
-	"github.com/IvanBern/ivai-os/internal/tools"
 	"github.com/joho/godotenv"
 	"github.com/mattn/go-isatty"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // ProgressEvent is emitted by the reasoning loop for SSE streaming.
@@ -64,27 +60,28 @@ func main() {
 
 	tp, err := telemetry.InitTracer("ivai-os")
 	if err != nil {
-		slog.Error("Failed to initialize tracer", "error", err)
-		os.Exit(1)
+		slog.Warn("Tracer init failed, continuing without telemetry", "error", err)
+	} else {
+		defer func() {
+			if err := tp.Shutdown(context.Background()); err != nil {
+				slog.Warn("Tracer shutdown error", "error", err)
+			}
+		}()
 	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			slog.Error("Tracer shutdown error", "error", err)
-		}
-	}()
 
 	envPath, dbPath := resolvePaths()
 	if err := godotenv.Load(envPath); err == nil {
 		slog.Info("Configuration loaded successfully", "path", envPath)
 	}
 
+	gateway := initGateway()
+	dbStore := initMemory(dbPath)
+	wasmEngine := initWasm()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	taskChan := make(chan taskWithResponder, 10)
-
-	gateway, dbStore, wasmEngine := initDependencies(dbPath)
-
 	port := resolvePort()
 	server := startHTTPServer(port, taskChan, gateway, dbStore)
 	startCLI(taskChan)
@@ -111,31 +108,42 @@ func resolvePort() string {
 	return port
 }
 
-func initDependencies(dbPath string) (*llm.Gateway, *memory.Store, *sandbox.WasmRuntime) {
+func initGateway() *llm.Gateway {
 	deepSeekKey := os.Getenv("DEEPSEEK_API_KEY")
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
 	geminiKey := os.Getenv("GEMINI_API_KEY")
 
-	noKeys := deepSeekKey == "" && anthropicKey == "" && geminiKey == ""
-	if noKeys {
+	if noLLMKeysConfigured(deepSeekKey, anthropicKey, geminiKey) {
 		slog.Warn("No LLM API keys (DeepSeek, Anthropic, or Gemini) are set. LLM execution will fail.")
 	}
+	return llm.NewGateway(deepSeekKey, anthropicKey, geminiKey)
+}
 
-	gateway := llm.NewGateway(deepSeekKey, anthropicKey, geminiKey)
+func noLLMKeysConfigured(keys ...string) bool {
+	for _, k := range keys {
+		if k != "" {
+			return false
+		}
+	}
+	return true
+}
 
+func initMemory(dbPath string) *memory.Store {
 	slog.Info("Mounting persistent memory subsystem...", "path", dbPath)
-	dbStore, err := memory.NewStore(dbPath)
+	store, err := memory.NewStore(dbPath)
 	if err != nil {
-		slog.Error("Failed to initialize memory database", "error", err)
-		os.Exit(1)
+		slog.Warn("Memory store init failed, continuing without persistence", "error", err)
+		return nil
 	}
 	slog.Info("Memory database mounted successfully")
+	return store
+}
 
+func initWasm() *sandbox.WasmRuntime {
 	slog.Info("Initializing Wazero execution sandbox...")
-	wasmEngine := sandbox.NewWasmRuntime()
+	engine := sandbox.NewWasmRuntime()
 	slog.Info("Execution sandbox ready with strict millisecond timeouts")
-
-	return gateway, dbStore, wasmEngine
+	return engine
 }
 
 func runEventLoop(ctx context.Context, taskChan <-chan taskWithResponder, server *http.Server, gateway *llm.Gateway, dbStore *memory.Store, wasmEngine *sandbox.WasmRuntime) {
@@ -345,493 +353,6 @@ func printPrompt() {
 	}
 }
 
-type TaskInput struct {
-	Instruction string
-	Gateway     *llm.Gateway
-	DBStore     *memory.Store
-	WasmEngine  *sandbox.WasmRuntime
-}
-
-type taskState struct {
-	gateway      *llm.Gateway
-	dbStore      *memory.Store
-	wasmEngine   *sandbox.WasmRuntime
-	tools        []llm.Tool
-	model        string
-	progressChan chan<- ProgressEvent
-}
-
-func (s *taskState) emit(evt ProgressEvent) {
-	if s.progressChan == nil {
-		return
-	}
-	select {
-	case s.progressChan <- evt:
-	default:
-	}
-}
-
-func processTask(ctx context.Context, in TaskInput, progressChan chan<- ProgressEvent) string {
-	model, instruction := extractModel(in.Instruction)
-	slog.Info("Task routing", "model", model, "instruction", instruction)
-
-	in.DBStore.SaveMessage("user", instruction, "")
-
-	state := &taskState{
-		gateway:      in.Gateway,
-		dbStore:      in.DBStore,
-		wasmEngine:   in.WasmEngine,
-		tools:        buildTools(),
-		model:        model,
-		progressChan: progressChan,
-	}
-
-	state.emit(ProgressEvent{Type: "task_start", Message: "Task started", Data: map[string]string{"model": model, "instruction": instruction}})
-
-	startTime := time.Now()
-	payload := buildPayload(in.DBStore, in.Gateway)
-	result := runReasoningLoop(ctx, payload, state)
-	duration := time.Since(startTime).Milliseconds()
-
-	// Track result for self-evolution
-	success := !strings.HasPrefix(result, "Error: ")
-	errMsg := ""
-	if !success {
-		errMsg = result
-	}
-	in.DBStore.SaveTaskResult(memory.TaskResult{
-		Instruction: instruction,
-		Model:       model,
-		Success:     success,
-		Response:    result,
-		ErrorMsg:    errMsg,
-		DurationMs:  duration,
-	})
-
-	// Auto-embed the instruction for future semantic recall (fire and forget)
-	go func() {
-		emb, err := in.Gateway.Embed(context.Background(), instruction)
-		if err != nil {
-			return
-		}
-		in.DBStore.SaveEmbedding("instruction", instruction, emb)
-	}()
-
-	// Close progress channel when done (if it exists) to signal completion to SSE handler.
-	if progressChan != nil {
-		close(progressChan)
-	}
-
-	return result
-}
-
-func extractModel(t string) (model, instruction string) {
-	model = "deepseek-v4-pro"
-	instruction = t
-
-	lower := strings.ToLower(t)
-	switch {
-	case strings.Contains(lower, "@claude"):
-		return "claude-3-5-sonnet-20241022", strings.Replace(t, "@claude", "", 1)
-	case strings.Contains(lower, "@gemini"):
-		return "gemini-2.5-pro", strings.Replace(t, "@gemini", "", 1)
-	case strings.Contains(lower, "@deepseek"):
-		return "deepseek-v4-pro", strings.Replace(t, "@deepseek", "", 1)
-	case strings.Contains(lower, "@research"):
-		return "deep-research-max-preview", strings.Replace(t, "@research", "", 1)
-	default:
-		return model, instruction
-	}
-}
-
-func buildTools() []llm.Tool {
-	define := func(name, desc string, props map[string]any, required []string) llm.Tool {
-		return llm.Tool{
-			Type: "function",
-			Function: llm.FunctionDefinition{
-				Name:        name,
-				Description: desc,
-				Parameters: map[string]any{
-					"type":       "object",
-					"properties": props,
-					"required":   required,
-				},
-			},
-		}
-	}
-
-	strProp := func(desc string) map[string]any {
-		return map[string]any{"type": "string", "description": desc}
-	}
-
-	return []llm.Tool{
-		define("read_file", "Reads the contents of a file at the given path on the local filesystem.",
-			map[string]any{"filepath": map[string]any{"type": "string"}},
-			[]string{"filepath"}),
-
-		define("write_file", "Writes text content to a file at the given path, overwriting it if it exists.",
-			map[string]any{
-				"filepath": map[string]any{"type": "string"},
-				"content":  map[string]any{"type": "string"},
-			},
-			[]string{"filepath", "content"}),
-
-		define("execute_command", "Executes a bash shell command on the host Debian system and returns the output.",
-			map[string]any{"command": map[string]any{"type": "string"}},
-			[]string{"command"}),
-
-		define("execute_wasm", "Executes a compiled WebAssembly (.wasm) binary in a secure, isolated sandbox with strict timeouts. Passes data via stdin and returns stdout.",
-			map[string]any{
-				"filepath":   strProp("Absolute path to the .wasm file on disk"),
-				"payload":    strProp("Data to send to the Wasm module via standard input (stdin)"),
-				"timeout_ms": map[string]any{"type": "integer", "description": "Execution timeout in milliseconds (e.g., 1000)"},
-			},
-			[]string{"filepath", "payload", "timeout_ms"}),
-
-		define("http_request", "Performs an HTTP request (GET, POST, etc.) and returns the response body.",
-			map[string]any{
-				"method":  strProp("HTTP method (e.g., GET, POST)"),
-				"url":     strProp("Target URL"),
-				"body":    strProp("Request body (optional)"),
-				"headers": map[string]any{"type": "object", "description": "HTTP headers (optional)"},
-			},
-			[]string{"method", "url"}),
-
-		define("github_pr", "Creates a GitHub Pull Request from a repo directory. Uses the gh CLI (must be authenticated). Provide title, body, repo path, and optionally a base branch.",
-			map[string]any{
-				"title": strProp("Pull request title"),
-				"body":  strProp("Pull request description"),
-				"base":  strProp("Target branch (default: main)"),
-				"repo":  strProp("Path to the git repository (e.g., /tmp/ivai-sandbox)"),
-			},
-			[]string{"title", "body", "repo"}),
-
-		define("code_health", "Runs CodeScene delta analysis on a git repository to check code health. Returns issues found or No issues found!.",
-			map[string]any{
-				"repo": strProp("Path to the git repository (e.g., /tmp/ivai-sandbox)"),
-			},
-			[]string{"repo"}),
-
-		define("create_issue", "Creates a GitHub Issue. Uses gh CLI. Provide title, body, labels (comma-separated), and optional assignee.",
-			map[string]any{
-				"title":    strProp("Issue title"),
-				"body":     strProp("Issue description"),
-				"labels":   strProp("Comma-separated labels (e.g., bug,phase-13)"),
-				"assignee": strProp("GitHub username to assign (optional)"),
-			},
-			[]string{"title", "body"}),
-
-		define("list_issues", "Lists GitHub Issues with optional filters.",
-			map[string]any{
-				"state":  strProp("open, closed, or all (default: open)"),
-				"labels": strProp("Comma-separated label filter (optional)"),
-				"limit":  strProp("Max issues to return (default: 10)"),
-			},
-			[]string{}),
-
-
-
-		define("update_wiki", "Updates a GitHub Wiki page by cloning the wiki repo, writing a markdown file, committing, and pushing. Provide page title and markdown content.",
-			map[string]any{
-				"page":    strProp("Wiki page title (creates page.md)"),
-				"content": strProp("Markdown content for the page"),
-			},
-			[]string{"page", "content"}),
-		define("swarm_clone", "Clones the ivai-os-linux VM to create a new worker VM. Provide a name for the new worker.",
-			map[string]any{
-				"name": strProp("Name for the new worker VM (e.g., ivai-worker-1)"),
-			},
-			[]string{"name"}),
-
-		define("swarm_deploy", "Deploys the latest Ivai binary to a worker VM and starts the service.",
-			map[string]any{
-				"name": strProp("Worker VM name"),
-			},
-			[]string{"name"}),
-
-		define("swarm_dispatch", "Sends a task to a worker VM for execution.",
-			map[string]any{
-				"worker":      strProp("Worker VM hostname or IP (e.g., 192.168.139.x)"),
-				"instruction": strProp("Task instruction to execute"),
-			},
-			[]string{"worker", "instruction"}),
-
-		define("swarm_gather", "Collects task results from a worker VM.",
-			map[string]any{
-				"worker": strProp("Worker VM hostname or IP"),
-			},
-			[]string{"worker"}),
-
-		define("swarm_status", "Checks status of a worker VM or lists all VMs if no name provided.",
-			map[string]any{
-				"name": strProp("Optional VM name. Leave empty to list all VMs."),
-			},
-			[]string{}),
-		define("swarm_spawn", "Spawns a local Ivai worker process on the same host. Much faster than VM workers. Provide name and optional port.",
-			map[string]any{
-				"name": strProp("Worker name (data dir will be /tmp/ivai-<name>)"),
-				"port": strProp("Port for the worker (default: 8081)"),
-			},
-			[]string{"name"}),
-
-		define("swarm_kill", "Kills a local Ivai worker process by port or name.",
-			map[string]any{
-				"port": strProp("Port of the worker to kill"),
-				"name": strProp("Name of the worker to kill"),
-			},
-			[]string{}),
-	}
-}
-
-func buildPayload(dbStore *memory.Store, gateway *llm.Gateway) []llm.Message {
-	history, _ := dbStore.GetRecentMessages(10)
-	homeDir, _ := os.UserHomeDir()
-	cwd, _ := os.Getwd()
-
-	payload := []llm.Message{
-		{Role: "system", Content: fmt.Sprintf(systemPromptTemplate, homeDir, cwd)},
-	}
-
-	// RAG: inject semantically similar past context
-	payload = injectRAGContext(payload, dbStore, gateway, history)
-
-	for _, msg := range history {
-		payload = append(payload, llm.Message{
-			Role:             msg.Role,
-			Content:          msg.Content,
-			ReasoningContent: msg.ReasoningContent,
-		})
-	}
-	return payload
-}
-
-func injectRAGContext(payload []llm.Message, dbStore *memory.Store, gateway *llm.Gateway, history []memory.Message) []llm.Message {
-	if len(history) == 0 {
-		return payload
-	}
-	latestMsg := history[len(history)-1].Content
-	emb, err := gateway.Embed(context.Background(), latestMsg)
-	if err != nil {
-		return payload
-	}
-	similar, err := dbStore.SearchSimilar(emb, 3)
-	if err != nil || len(similar) == 0 {
-		return payload
-	}
-	ragCtx := "## Relevant Past Context (from semantic memory)\n"
-	for i, s := range similar {
-		ragCtx += fmt.Sprintf("%d. [%.0f%% match] %s\n", i+1, s.Similarity*100, s.Content)
-	}
-	return append(payload, llm.Message{Role: "system", Content: ragCtx})
-}
-
-func runReasoningLoop(ctx context.Context, payload []llm.Message, s *taskState) string {
-	tracer := otel.Tracer("ivai-os")
-	for {
-		ctx, span := tracer.Start(ctx, "reasoning-step",
-			trace.WithAttributes(
-				attribute.String("model", s.model),
-				attribute.Int("messages", len(payload)),
-			),
-		)
-		responseMsg, err := s.gateway.Chat(ctx, payload, s.tools, s.model)
-		if err != nil {
-			slog.Error("LLM Execution Failed", "error", err)
-			s.emit(ProgressEvent{Type: "task_error", Message: "LLM error", Data: map[string]string{"error": err.Error()}})
-			span.End()
-			printPrompt()
-			return "Error: " + err.Error()
-		}
-
-		if done, result := checkCompletion(responseMsg, s); done {
-			span.End()
-			return result
-		}
-
-		showThinking(responseMsg.ReasoningContent)
-		s.emit(ProgressEvent{
-			Type:    "thinking",
-			Message: "Model is thinking",
-			Data:    map[string]string{"reasoning": responseMsg.ReasoningContent, "content": responseMsg.Content},
-		})
-		payload = append(payload, responseMsg)
-		payload = appendToolResults(ctx, payload, responseMsg.ToolCalls, s)
-		span.End()
-	}
-}
-
-func checkCompletion(msg llm.Message, s *taskState) (done bool, result string) {
-	if len(msg.ToolCalls) > 0 {
-		return false, ""
-	}
-	slog.Info("Task completed", "response_length", len(msg.Content))
-	s.dbStore.SaveMessage("assistant", msg.Content, msg.ReasoningContent)
-	if isatty.IsTerminal(os.Stdout.Fd()) {
-		fmt.Printf("\n[Ivai] %s\n", msg.Content)
-	}
-	printPrompt()
-	return true, msg.Content
-}
-
-func showThinking(reasoningContent string) {
-	if reasoningContent != "" {
-		if isatty.IsTerminal(os.Stdout.Fd()) {
-			fmt.Printf("\n[Thinking] %s\n", reasoningContent)
-		} else {
-			slog.Info("Thinking", "reasoning", reasoningContent)
-		}
-	} else {
-		slog.Info("Thinking...")
-	}
-}
-
-func appendToolResults(ctx context.Context, payload []llm.Message, toolCalls []llm.ToolCall, s *taskState) []llm.Message {
-	for _, tc := range toolCalls {
-		slog.Info("Executing tool", "name", tc.Function.Name, "args", tc.Function.Arguments)
-		s.emit(ProgressEvent{
-			Type:    "tool_call",
-			Message: fmt.Sprintf("Calling tool: %s", tc.Function.Name),
-			Data:    map[string]any{"name": tc.Function.Name, "args": tc.Function.Arguments},
-		})
-		toolResult := executeToolCall(ctx, tc, s.wasmEngine)
-		s.emit(ProgressEvent{
-			Type:    "tool_result",
-			Message: fmt.Sprintf("Tool result: %s", tc.Function.Name),
-			Data:    map[string]any{"name": tc.Function.Name, "result": truncate(toolResult, 500)},
-		})
-		payload = append(payload, llm.Message{
-			Role:       "tool",
-			Content:    toolResult,
-			ToolCallID: tc.ID,
-		})
-	}
-	return payload
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-func executeGitHubPR(argsJSON string) (string, error) {
-	var args struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
-		Base  string `json:"base"`
-		Repo  string `json:"repo"`
-	}
-	json.Unmarshal([]byte(argsJSON), &args)
-	base := args.Base
-	if base == "" {
-		base = "main"
-	}
-	cmd := fmt.Sprintf("gh pr create --title %q --body %q --base %s", args.Title, args.Body, base)
-	if args.Repo != "" {
-		cmd = fmt.Sprintf("cd %s && %s", args.Repo, cmd)
-	}
-	return tools.ExecuteCommand(cmd)
-}
-
-func executeCodeHealth(repoPath string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"repo": repoPath})
-	result, err := tools.HttpRequest("POST", "http://host.orb.internal:9876/", string(body), map[string]string{"Content-Type": "application/json"})
-	if err != nil {
-		return "", err
-	}
-	var resp struct {
-		OK     bool   `json:"ok"`
-		Output string `json:"output"`
-	}
-	json.Unmarshal([]byte(result), &resp)
-	return resp.Output, nil
-}
-
-func executeCodeHealthTool(argsJSON string) (string, error) {
-	var args struct {
-		Repo string `json:"repo"`
-	}
-	json.Unmarshal([]byte(argsJSON), &args)
-	return executeCodeHealth(args.Repo)
-}
-
-func executeCreateIssue(argsJSON string) (string, error) {
-	var args struct {
-		Title    string `json:"title"`
-		Body     string `json:"body"`
-		Labels   string `json:"labels"`
-		Assignee string `json:"assignee"`
-	}
-	json.Unmarshal([]byte(argsJSON), &args)
-	cmd := fmt.Sprintf("gh issue create --repo IvanBern/ivai-os --title %q --body %q", args.Title, args.Body)
-	if args.Labels != "" {
-		cmd += fmt.Sprintf(" --label %q", args.Labels)
-	}
-	if args.Assignee != "" {
-		cmd += fmt.Sprintf(" --assignee %q", args.Assignee)
-	}
-	return tools.ExecuteCommand(cmd)
-}
-
-func executeListIssues(argsJSON string) (string, error) {
-	var args struct {
-		State  string `json:"state"`
-		Labels string `json:"labels"`
-		Limit  string `json:"limit"`
-	}
-	json.Unmarshal([]byte(argsJSON), &args)
-	if args.State == "" {
-		args.State = "open"
-	}
-	if args.Limit == "" {
-		args.Limit = "10"
-	}
-	cmd := fmt.Sprintf("gh issue list --repo IvanBern/ivai-os --state %s --limit %s --json title,state,labels,assignees", args.State, args.Limit)
-	if args.Labels != "" {
-		cmd += fmt.Sprintf(" --label %q", args.Labels)
-	}
-	return tools.ExecuteCommand(cmd)
-}
-
-func dispatchSwarmTool(name, argsJSON string) (string, error) {
-	switch name {
-	case "swarm_clone":
-		return executeSwarmClone(argsJSON)
-	case "swarm_deploy":
-		return executeSwarmDeploy(argsJSON)
-	case "swarm_dispatch":
-		return executeSwarmDispatch(argsJSON)
-	case "swarm_gather":
-		return executeSwarmGather(argsJSON)
-	case "swarm_status":
-		return executeSwarmStatus(argsJSON)
-	default:
-		return fmt.Sprintf("Unknown swarm tool: %s", name), nil
-	}
-}
-
-func resultOrError(result string, err error) string {
-	if err != nil {
-		return fmt.Sprintf("Error: %v", err)
-	}
-	return result
-}
-
-func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.WasmRuntime) string {
-	tracer := otel.Tracer("ivai-os")
-	ctx, span := tracer.Start(ctx, "tool."+tc.Function.Name,
-		trace.WithAttributes(
-			attribute.String("tool.name", tc.Function.Name),
-			attribute.Int("tool.args_len", len(tc.Function.Arguments)),
-		),
-	)
-	defer span.End()
-	if h, ok := toolRegistry[tc.Function.Name]; ok {
-		return resultOrError(h(ctx, tc.Function.Arguments, wasmEngine))
-	}
-	return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
-}
 
 // --- Web Dashboard API Handlers ---
 
@@ -865,6 +386,11 @@ func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) 
 
 func handleMemory(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
 	w.Header().Set("Content-Type", "application/json")
+
+	if dbStore == nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": "Memory store not available", "messages": []memory.DashboardMessage{}})
+		return
+	}
 
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
 	offset := parseQueryInt(r.URL.Query().Get("offset"), 0, func(v int) bool { return v >= 0 })
@@ -905,6 +431,10 @@ func handleTools(w http.ResponseWriter, r *http.Request) {
 
 func handleTaskResults(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
 	w.Header().Set("Content-Type", "application/json")
+	if dbStore == nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": "Memory store not available", "results": []memory.TaskResult{}})
+		return
+	}
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 20, func(v int) bool { return v > 0 && v <= 200 })
 	results, err := dbStore.GetTaskResults(limit)
 	if err != nil {
@@ -929,6 +459,15 @@ func parseQueryInt(s string, defaultVal int, validate func(int) bool) int {
 
 func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
 	w.Header().Set("Content-Type", "application/json")
+	if dbStore == nil {
+		json.NewEncoder(w).Encode(map[string]any{
+			"system_prompt":    systemPromptTemplate,
+			"embeddings_count": 0,
+			"messages_count":   0,
+			"task_stats":       memory.TaskStats{},
+		})
+		return
+	}
 	embCount, _ := dbStore.CountEmbeddings()
 	msgCount, _ := dbStore.CountMessages()
 	stats, _ := dbStore.GetTaskStats()
@@ -942,6 +481,10 @@ func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store)
 
 func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
 	w.Header().Set("Content-Type", "application/json")
+	if dbStore == nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": "Memory store not available", "embeddings": []memory.EmbeddingResult{}})
+		return
+	}
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
 	results, err := dbStore.GetRecentEmbeddings(limit)
 	if err != nil {
@@ -952,100 +495,4 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.St
 		results = []memory.EmbeddingResult{}
 	}
 	json.NewEncoder(w).Encode(map[string]any{"embeddings": results})
-}
-
-func executeUpdateWiki(argsJSON string) (string, error) {
-	var args struct {
-		Page    string `json:"page"`
-		Content string `json:"content"`
-	}
-	json.Unmarshal([]byte(argsJSON), &args)
-	filename := args.Page + ".md"
-	cmd := fmt.Sprintf("cd /tmp && rm -rf ivai-wiki && git clone https://github.com/IvanBern/ivai-os.wiki.git ivai-wiki && cd ivai-wiki && cat > %s << 'WIKIEOF'\n%s\nWIKIEOF\n && git add %s && git commit -m 'update %s' && git push", filename, args.Content, filename, args.Page)
-	return tools.ExecuteCommand(cmd)
-}
-
-func shellQuote(s string) string {
-	q := fmt.Sprintf("%q", s)
-	return q
-}
-func featureEnabled(name string) bool {
-	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
-}
-
-// --- Swarm Tools ---
-
-func callVMBridge(endpoint string, body map[string]string) (string, error) {
-	jsonBody, _ := json.Marshal(body)
-	return tools.HttpRequest("POST", "http://host.orb.internal:9877"+endpoint, string(jsonBody), map[string]string{"Content-Type": "application/json"})
-}
-
-func executeSwarmClone(argsJSON string) (string, error) {
-	var a struct{ Name string `json:"name"` }
-	json.Unmarshal([]byte(argsJSON), &a)
-	return callVMBridge("/vm/clone", map[string]string{"name": a.Name})
-}
-
-func executeSwarmDeploy(argsJSON string) (string, error) {
-	var a struct{ Name string `json:"name"` }
-	json.Unmarshal([]byte(argsJSON), &a)
-	return callVMBridge("/vm/deploy", map[string]string{"name": a.Name})
-}
-
-func executeSwarmDispatch(argsJSON string) (string, error) {
-	var a struct{ Worker, Task string `json:"worker,instruction"` }
-	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
-		fmt.Sprintf(`{"instruction":%q}`, a.Task),
-		map[string]string{"Content-Type": "application/json"})
-}
-
-func executeSwarmGather(argsJSON string) (string, error) {
-	var a struct{ Worker string `json:"worker"` }
-	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
-}
-
-func executeSwarmStatus(argsJSON string) (string, error) {
-	var a struct{ Name string `json:"name"` }
-	json.Unmarshal([]byte(argsJSON), &a)
-	if a.Name != "" {
-		return callVMBridge("/vm/status", map[string]string{"name": a.Name})
-	}
-	return callVMBridge("/vm/list", nil)
-}
-
-func executeSwarmSpawn(argsJSON string) (string, error) {
-	var a struct {
-		Port string `json:"port"`
-		Name string `json:"name"`
-	}
-	json.Unmarshal([]byte(argsJSON), &a)
-	if a.Port == "" {
-		a.Port = "8081"
-	}
-	dataDir := "/tmp/ivai-" + a.Name
-	cmd := fmt.Sprintf("mkdir -p %s && cp /etc/ivai/.env %s/.env 2>/dev/null; IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, dataDir, dataDir, a.Port, a.Name, a.Port)
-	out, err := tools.ExecuteCommand(cmd)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(`{"worker":"localhost:%s","status":%s}`, a.Port, out), nil
-}
-
-func executeSwarmKill(argsJSON string) (string, error) {
-	var a struct {
-		Port string `json:"port"`
-		Name string `json:"name"`
-	}
-	json.Unmarshal([]byte(argsJSON), &a)
-	if a.Port != "" {
-		tools.ExecuteCommand(fmt.Sprintf("fuser -k %s/tcp 2>/dev/null", a.Port))
-		return fmt.Sprintf("Killed worker on port %s", a.Port), nil
-	}
-	if a.Name != "" {
-		tools.ExecuteCommand(fmt.Sprintf("pkill -f 'ivai-%s' 2>/dev/null", a.Name))
-		return fmt.Sprintf("Killed worker %s", a.Name), nil
-	}
-	return "No port or name specified", nil
 }

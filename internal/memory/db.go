@@ -67,12 +67,18 @@ func NewStore(dbPath string) (*Store, error) {
 
 // SaveMessage writes a new prompt or response to memory
 func (s *Store) SaveMessage(role, content, reasoning string) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
 	_, err := s.db.Exec("INSERT INTO messages (role, content, reasoning_content) VALUES (?, ?, ?)", role, content, reasoning)
 	return err
 }
 
 // CountMessages returns the total number of stored messages.
 func (s *Store) CountMessages() (int, error) {
+	if s.db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
 	var count int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil {
 		return 0, err
@@ -108,6 +114,9 @@ func (s *Store) GetAllMessages(limit, offset int) ([]DashboardMessage, error) {
 }
 
 func queryMessageRows[T any](s *Store, query string, args []any, fields func(*T) []any) ([]T, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -139,6 +148,9 @@ type TaskResult struct {
 
 // SaveTaskResult records a task outcome.
 func (s *Store) SaveTaskResult(tr TaskResult) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
 	_, err := s.db.Exec(
 		"INSERT INTO task_results (instruction, model, success, response, error_msg, duration_ms) VALUES (?, ?, ?, ?, ?, ?)",
 		tr.Instruction, tr.Model, tr.Success, tr.Response, tr.ErrorMsg, tr.DurationMs,
@@ -170,6 +182,9 @@ func (s *Store) GetTaskResults(limit int) ([]TaskResult, error) {
 
 // SaveEmbedding stores a text embedding for semantic search.
 func (s *Store) SaveEmbedding(source, content string, embedding []float64) error {
+	if s.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
 	data, err := json.Marshal(embedding)
 	if err != nil {
 		return err
@@ -187,6 +202,9 @@ type EmbeddingResult struct {
 
 // SearchSimilar finds the most semantically similar stored embeddings.
 func (s *Store) SearchSimilar(queryEmbedding []float64, limit int) ([]EmbeddingResult, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
 	candidates, err := s.loadRecentEmbeddings(200)
 	if err != nil {
 		return nil, err
@@ -271,6 +289,9 @@ func cosineSimilarity(a, b []float64) float64 {
 
 // CountEmbeddings returns the total number of stored embeddings.
 func (s *Store) CountEmbeddings() (int, error) {
+	if s.db == nil {
+		return 0, fmt.Errorf("database not initialized")
+	}
 	var count int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM embeddings").Scan(&count); err != nil {
 		return 0, err
@@ -289,10 +310,15 @@ type TaskStats struct {
 
 // GetTaskStats returns aggregate statistics from task_results.
 func (s *Store) GetTaskStats() (TaskStats, error) {
+	if s.db == nil {
+		return TaskStats{}, fmt.Errorf("database not initialized")
+	}
 	var stats TaskStats
-	if err := s.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN NOT success THEN 1 ELSE 0 END),0), COALESCE(AVG(duration_ms),0) FROM task_results").Scan(&stats.Total, &stats.Successes, &stats.Failures, &stats.AvgDuration); err != nil {
+	var avgDuration float64
+	if err := s.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN NOT success THEN 1 ELSE 0 END),0), COALESCE(AVG(duration_ms),0) FROM task_results").Scan(&stats.Total, &stats.Successes, &stats.Failures, &avgDuration); err != nil {
 		return stats, err
 	}
+	stats.AvgDuration = int64(avgDuration)
 	if stats.Total > 0 {
 		stats.SuccessRate = float64(stats.Successes) / float64(stats.Total) * 100
 	}
@@ -301,6 +327,9 @@ func (s *Store) GetTaskStats() (TaskStats, error) {
 
 // GetRecentEmbeddings returns the most recent embeddings with their metadata.
 func (s *Store) GetRecentEmbeddings(limit int) ([]EmbeddingResult, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
 	rows, err := s.db.Query("SELECT source, content FROM embeddings ORDER BY id DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
