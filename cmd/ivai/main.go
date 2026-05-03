@@ -190,6 +190,9 @@ func startHTTPServer(port string, taskChan chan<- taskWithResponder, gateway *ll
 	mux.HandleFunc("/api/task-results", func(w http.ResponseWriter, r *http.Request) {
 		handleTaskResults(w, r, dbStore)
 	})
+	mux.HandleFunc("/api/system", func(w http.ResponseWriter, r *http.Request) {
+		handleSystem(w, r, dbStore)
+	})
 
 	// Serve embedded web dashboard
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -837,6 +840,20 @@ func handleTaskResults(w http.ResponseWriter, r *http.Request, dbStore *memory.S
 	}
 	json.NewEncoder(w).Encode(map[string]any{
 		"results": results,
+	})
+}
+
+func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	w.Header().Set("Content-Type", "application/json")
+	embCount, _ := dbStore.CountEmbeddings()
+	msgCount, _ := dbStore.CountMessages()
+	stats, _ := dbStore.GetTaskStats()
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"system_prompt":    systemPromptTemplate,
+		"embeddings_count": embCount,
+		"messages_count":   msgCount,
+		"task_stats":       stats,
 	})
 }
 

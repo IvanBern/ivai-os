@@ -268,3 +268,33 @@ func cosineSimilarity(a, b []float64) float64 {
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
+
+// CountEmbeddings returns the total number of stored embeddings.
+func (s *Store) CountEmbeddings() (int, error) {
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM embeddings").Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// TaskStats holds aggregate task statistics.
+type TaskStats struct {
+	Total       int     `json:"total"`
+	Successes   int     `json:"successes"`
+	Failures    int     `json:"failures"`
+	SuccessRate float64 `json:"success_rate"`
+	AvgDuration int64   `json:"avg_duration_ms"`
+}
+
+// GetTaskStats returns aggregate statistics from task_results.
+func (s *Store) GetTaskStats() (TaskStats, error) {
+	var stats TaskStats
+	if err := s.db.QueryRow("SELECT COUNT(*), COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN NOT success THEN 1 ELSE 0 END),0), COALESCE(AVG(duration_ms),0) FROM task_results").Scan(&stats.Total, &stats.Successes, &stats.Failures, &stats.AvgDuration); err != nil {
+		return stats, err
+	}
+	if stats.Total > 0 {
+		stats.SuccessRate = float64(stats.Successes) / float64(stats.Total) * 100
+	}
+	return stats, nil
+}
