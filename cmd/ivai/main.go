@@ -230,6 +230,7 @@ func handleTaskBlocking(w http.ResponseWriter, r *http.Request, taskChan chan<- 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 	var req TaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -258,6 +259,7 @@ func handleTaskStreaming(w http.ResponseWriter, r *http.Request, taskChan chan<-
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 	var req TaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -606,7 +608,7 @@ func buildPayload(dbStore *memory.Store, gateway *llm.Gateway) []llm.Message {
 }
 
 func injectRAGContext(payload []llm.Message, dbStore *memory.Store, gateway *llm.Gateway, history []memory.Message) []llm.Message {
-	if len(history) == 0 {
+	if !featureEnabled("rag") || len(history) == 0 {
 		return payload
 	}
 	latestMsg := history[len(history)-1].Content
@@ -702,6 +704,7 @@ func appendToolResults(ctx context.Context, payload []llm.Message, toolCalls []l
 		payload = append(payload, llm.Message{
 			Role:       "tool",
 			Content:    toolResult,
+			Name:       tc.Function.Name,
 			ToolCallID: tc.ID,
 		})
 	}
@@ -716,6 +719,10 @@ func truncate(s string, maxLen int) string {
 }
 
 func executeGitHubPR(argsJSON string) (string, error) {
+	// Check gh CLI auth status first for better error messages
+	if out, err := tools.ExecuteCommand("gh auth status 2>&1"); err != nil {
+		return "", fmt.Errorf("gh not authenticated: %s", out)
+	}
 	var args struct {
 		Title string `json:"title"`
 		Body  string `json:"body"`
@@ -836,6 +843,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 // --- Web Dashboard API Handlers ---
 
 func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -864,6 +875,10 @@ func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) 
 }
 
 func handleMemory(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
@@ -888,6 +903,10 @@ func handleMemory(w http.ResponseWriter, r *http.Request, dbStore *memory.Store)
 }
 
 func handleTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	toolList := buildTools()
 	toolsInfo := make([]map[string]any, 0, len(toolList))
@@ -904,6 +923,10 @@ func handleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleTaskResults(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 20, func(v int) bool { return v > 0 && v <= 200 })
 	results, err := dbStore.GetTaskResults(limit)
@@ -928,6 +951,10 @@ func parseQueryInt(s string, defaultVal int, validate func(int) bool) int {
 }
 
 func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	embCount, _ := dbStore.CountEmbeddings()
 	msgCount, _ := dbStore.CountMessages()
@@ -941,6 +968,10 @@ func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store)
 }
 
 func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
 	results, err := dbStore.GetRecentEmbeddings(limit)
@@ -961,14 +992,24 @@ func executeUpdateWiki(argsJSON string) (string, error) {
 	}
 	json.Unmarshal([]byte(argsJSON), &args)
 	filename := args.Page + ".md"
-	cmd := fmt.Sprintf("cd /tmp && rm -rf ivai-wiki && git clone https://github.com/IvanBern/ivai-os.wiki.git ivai-wiki && cd ivai-wiki && cat > %s << 'WIKIEOF'\n%s\nWIKIEOF\n && git add %s && git commit -m 'update %s' && git push", filename, args.Content, filename, args.Page)
-	return tools.ExecuteCommand(cmd)
+	repoDir := "/tmp/ivai-wiki"
+
+	// Clean up and clone the wiki repo
+	setupCmd := fmt.Sprintf("rm -rf %s && git clone https://github.com/IvanBern/ivai-os.wiki.git %s", repoDir, repoDir)
+	if _, err := tools.ExecuteCommand(setupCmd); err != nil {
+		return "", fmt.Errorf("failed to clone wiki: %w", err)
+	}
+
+	// Write content using Go native I/O to prevent shell injection via heredoc
+	if err := os.WriteFile(repoDir+"/"+filename, []byte(args.Content), 0644); err != nil {
+		return "", fmt.Errorf("failed to write wiki page: %w", err)
+	}
+
+	// Commit and push
+	gitCmd := fmt.Sprintf("cd %s && git add %s && git commit -m %q && git push", repoDir, filename, "update "+args.Page)
+	return tools.ExecuteCommand(gitCmd)
 }
 
-func shellQuote(s string) string {
-	q := fmt.Sprintf("%q", s)
-	return q
-}
 func featureEnabled(name string) bool {
 	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
 }
@@ -1128,7 +1169,22 @@ func executeSwarmSpawn(argsJSON string) (string, error) {
 		a.Port = "8081"
 	}
 	dataDir := "/tmp/ivai-" + a.Name
-	cmd := fmt.Sprintf("mkdir -p %s && cp /etc/ivai/.env %s/.env 2>/dev/null; IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, dataDir, dataDir, a.Port, a.Name, a.Port)
+
+	// Create data dir with owner-only permissions
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create data dir: %w", err)
+	}
+
+	// Read source env and write with 0600 permissions to avoid world-readable secrets in /tmp
+	envContent, err := os.ReadFile("/etc/ivai/.env")
+	if err != nil {
+		return "", fmt.Errorf("failed to read source env: %w", err)
+	}
+	if err := os.WriteFile(dataDir+"/.env", envContent, 0600); err != nil {
+		return "", fmt.Errorf("failed to write env: %w", err)
+	}
+
+	cmd := fmt.Sprintf("IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, a.Port, a.Name, a.Port)
 	out, err := tools.ExecuteCommand(cmd)
 	if err != nil {
 		return "", err

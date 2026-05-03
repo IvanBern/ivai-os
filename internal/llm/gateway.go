@@ -444,7 +444,10 @@ func translateToolsToGemini(tools []Tool) []GeminiTool {
 	return []GeminiTool{{FunctionDeclarations: declarations}}
 }
 
-func parseGeminiResponse(resp GeminiResponse) Message {
+func parseGeminiResponse(resp GeminiResponse) (Message, error) {
+	if len(resp.Candidates) == 0 {
+		return Message{}, fmt.Errorf("Gemini empty candidates")
+	}
 	resMsg := Message{Role: "assistant"}
 	modelContent := resp.Candidates[0].Content
 	for _, p := range modelContent.Parts {
@@ -463,7 +466,7 @@ func parseGeminiResponse(resp GeminiResponse) Message {
 			})
 		}
 	}
-	return resMsg
+	return resMsg, nil
 }
 
 func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {
@@ -503,5 +506,5 @@ func (g *Gateway) chatGemini(ctx context.Context, messages []Message, tools []To
 		return Message{}, fmt.Errorf("Gemini empty candidates")
 	}
 
-	return parseGeminiResponse(geminiResp), nil
+	return parseGeminiResponse(geminiResp)
 }
