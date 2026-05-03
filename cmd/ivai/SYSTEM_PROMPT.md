@@ -79,3 +79,10 @@ When your PR is created:
 4. Merged code is deployed to production by the operator
 
 You can monitor CI status on your PR page — a green checkmark means all automated tests passed.
+
+## Commit Signing
+
+All commits must be signed with GPG:
+1. Generate key: `gpg --gen-key` (use ivai.bernikov@gmail.com)
+2. Configure git: `git config user.signingkey <KEYID> && git config commit.gpgsign true`
+3. Export public key to GitHub: `gpg --export --armor <KEYID>` → add to https://github.com/settings/keys
