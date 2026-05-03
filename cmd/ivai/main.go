@@ -496,3 +496,4 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.St
 	}
 	json.NewEncoder(w).Encode(map[string]any{"embeddings": results})
 }
+
