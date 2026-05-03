@@ -32,7 +32,7 @@ func executeSwarmDispatch(argsJSON string) (string, error) {
 		Task   string `json:"instruction"`
 	}
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+workerURL(a.Worker)+"/api/task",
+	return tools.HttpRequest("POST", resolveWorkerURL(a.Worker, "/api/task"),
 		fmt.Sprintf(`{"instruction":%q}`, a.Task),
 		map[string]string{"Content-Type": "application/json"})
 }
@@ -40,7 +40,7 @@ func executeSwarmDispatch(argsJSON string) (string, error) {
 func executeSwarmGather(argsJSON string) (string, error) {
 	var a struct{ Worker string `json:"worker"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+workerURL(a.Worker)+"/api/task-results?limit=5", "", nil)
+	return tools.HttpRequest("GET", resolveWorkerURL(a.Worker, "/api/task-results?limit=5"), "", nil)
 }
 
 func executeSwarmStatus(argsJSON string) (string, error) {
@@ -62,7 +62,22 @@ func executeSwarmSpawn(argsJSON string) (string, error) {
 		a.Port = "8081"
 	}
 	dataDir := "/tmp/ivai-" + a.Name
-	cmd := fmt.Sprintf("mkdir -p %s && cp /etc/ivai/.env %s/.env 2>/dev/null; IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, dataDir, dataDir, a.Port, a.Name, a.Port)
+
+	// Write filtered .env with API keys from parent process (0600 to avoid secret leaks)
+	var sb strings.Builder
+	for _, key := range []string{"DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"} {
+		if val := os.Getenv(key); val != "" {
+			sb.WriteString(fmt.Sprintf("%s=%s\n", key, val))
+		}
+	}
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", dataDir, err)
+	}
+	if err := os.WriteFile(dataDir+"/.env", []byte(sb.String()), 0600); err != nil {
+		return "", fmt.Errorf("write .env: %w", err)
+	}
+
+	cmd := fmt.Sprintf("IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, a.Port, a.Name, a.Port)
 	out, err := tools.ExecuteCommand(cmd)
 	if err != nil {
 		return "", err
@@ -88,6 +103,19 @@ func executeSwarmKill(argsJSON string) (string, error) {
 }
 
 // workerURL ensures a worker address has a port, defaulting to 8080.
+// resolveWorkerURL builds an HTTP URL for a worker, defaulting to port 8080
+// only when the worker string doesn't already include a port.
+func resolveWorkerURL(worker, path string) string {
+	if strings.Contains(worker, "://") {
+		return worker + path
+	}
+	if strings.Contains(worker, ":") {
+		return "http://" + worker + path
+	}
+	return "http://" + worker + ":8080" + path
+}
+
+// workerURL returns just the address with default port.
 func workerURL(addr string) string {
 	if strings.Contains(addr, ":") {
 		return addr
