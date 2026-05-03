@@ -330,3 +330,158 @@ Expose Ivai's capabilities as an MCP server so other agents (Crush, Claude, Curs
 | **Gamma** | T9 (KAIROS proactive) | 2w | Phase 9, Phase 10 |
 | **Gamma** | T6 (Session continuity), T7 (Pipeline dashboard) | 2w | T1, CI |
 | **Polish** | T10 (Personality & evolution) | 1w | Stats system |
+
+### 6. Nano Banana & Multimodal Generation Tools
+
+**Nano Banana:** Google's Gemini Image Generation models via API. Three tiers:
+- **Nano Banana** (Gemini 2.5 Flash Image): 1024px, fast, efficient
+- **Nano Banana Pro** (Gemini 3 Pro Image): Up to 4K, search grounding
+- **Nano Banana 2** (Gemini 3.1 Flash Image): 512px–4K, subject consistency
+
+**Other GenAI tools for integration:**
+
+| Tool | Capability | API | Use Case |
+|---|---|---|---|
+| **Nano Banana** | Text→Image, Image Editing | Gemini API (same key as Ivai's `@gemini`) | Generate UI mockups, diagrams, illustrations |
+| **DALL-E 3** | Text→Image | OpenAI API | Alternative image generator |
+| **Stable Diffusion** | Text→Image, Image→Image | Stability AI API / Replicate | Open-source option, local deployment |
+| **Midjourney** | Text→Image | Discord bot API (unofficial) | Artistic generation |
+| **Whisper** | Audio→Text transcription | OpenAI API / local | Transcribe meetings, podcasts, voice notes |
+| **ElevenLabs** | Text→Speech, Voice Cloning | REST API | Ivai speaking responses, custom voice |
+| **OpenAI TTS** | Text→Speech | OpenAI API | Alternative TTS |
+| **Runway Gen-3** | Text→Video, Image→Video | REST API | Generate short video clips |
+| **Pika** | Text→Video | REST API | Alternative video generator |
+| **Suno** | Text→Music | REST API | Generate background music, jingles |
+| **Udio** | Text→Music | REST API | Alternative music generator |
+| **HeyGen** | Talking Avatars | REST API | Ivai with a face, video responses |
+| **D-ID** | AI Video Avatars | REST API | Alternative avatar platform |
+| **Replicate** | Unified API for 25,000+ models | REST API | One API for all open-source models |
+| **Google Imagen** | Text→Image (via Vertex AI) | GCloud API | Enterprise image generation |
+| **Ideogram** | Text→Image with text rendering | REST API | Images with accurate text |
+
+---
+
+## New Ideation Items (Multimodal & Generative)
+
+### 🎨 T12: Multimodal Tool Suite
+
+**Inspiration:** Nano Banana, DALL-E, ElevenLabs, Whisper
+
+Add tools to Ivai that wrap GenAI APIs:
+
+```
+ivai generate image "a futuristic AI OS dashboard in dark theme"
+  → saves to /home/ivai/artifacts/image_2026-05-03_001.png
+
+ivai transcribe "meeting-recording.mp3"
+  → saves transcript to /home/ivai/artifacts/meeting-transcript.md
+
+ivai speak "Hello Ivan, deployment complete" --voice "British male"
+  → plays audio output, saves .mp3 to artifacts
+
+ivai generate video "5-second logo animation for Ivai OS"
+  → saves to /home/ivai/artifacts/video_001.mp4
+
+ivai generate music "lo-fi background for coding, 3 minutes"
+  → saves to /home/ivai/artifacts/music_001.mp3
+```
+
+**Tool definitions:**
+- `generate_image(prompt, model?, size?, output_path?)` — Nano Banana, DALL-E, SD
+- `transcribe_audio(filepath, model?)` — Whisper via API
+- `generate_speech(text, voice?, output_path?)` — ElevenLabs, OpenAI TTS  
+- `generate_video(prompt, duration?, output_path?)` — Runway, Pika
+- `generate_music(prompt, duration?, style?, output_path?)` — Suno, Udio
+- `generate_avatar(text, avatar_id?, output_path?)` — HeyGen, D-ID
+
+### 📁 T13: Artifact Management System
+
+**Inspiration:** Claude Code's memory system + Warp Drive
+
+Organized storage for all generated assets:
+
+```
+/home/ivai/artifacts/
+├── images/
+│   ├── 2026-05/
+│   │   ├── dashboard-mockup_001.png
+│   │   └── logo-variation_002.png
+├── audio/
+│   ├── transcripts/
+│   │   └── meeting-2026-05-03.md
+│   └── speech/
+│       └── deployment-complete_2026-05-03.mp3
+├── video/
+│   └── logo-animation_001.mp4
+├── music/
+│   └── lofi-coding-3min.mp3
+├── avatars/
+│   └── ivai-presentation_001.mp4
+└── index.json
+    └── { "id": "img_001", "type": "image", "prompt": "...", "model": "nano-banana-2", "created": "..." }
+```
+
+**API endpoint:** `GET /api/artifacts?type=image&limit=20`
+**Web dashboard:** New Artifacts tab in the dashboard
+**CLI:** `ivai artifacts list`, `ivai artifacts download <id>`
+
+### 🔄 T14: Unified Model Router
+
+**Inspiration:** Replicate's unified API
+
+A single `generate` tool that routes to the best model for each task:
+
+```go
+// Ivai decides which model to use based on the task
+ivai generate --type image --prompt "dark theme dashboard" 
+  → routes to Nano Banana 2 (best quality/free)
+  → saves to artifacts with model metadata
+
+ivai generate --type image --prompt "logo with company name 'Ivai OS'"
+  → routes to Ideogram (best text-in-image)
+```
+
+**Implementation:**
+- `IVAI_IMAGE_MODEL=nano-banana-2` (default config)
+- `IVAI_SPEECH_MODEL=elevenlabs`
+- `IVAI_MUSIC_MODEL=suno`
+- Model preference configurable per type
+
+### 🎬 T15: Multimedia Pipeline Orchestration
+
+**Inspiration:** Oz's multi-agent orchestration
+
+Chain multimodal tools together:
+
+```yaml
+# .ivai/workflows/product-launch.yaml
+name: Product Launch Assets
+steps:
+  - generate_image: "Ivai OS v1.0 hero banner, dark theme, 16:9"
+    save_as: hero-banner
+  - generate_image: "Ivai OS logo variation, minimal, 1:1"
+    save_as: logo-square
+  - generate_music: "upbeat tech launch background, 30 seconds"
+    save_as: launch-jingle
+  - generate_speech: "Introducing Ivai OS version 1.0" --voice "professional"
+    save_as: launch-voiceover
+  - generate_video: "combine hero-banner with launch-voiceover and launch-jingle"
+    save_as: launch-video
+```
+
+---
+
+## Updated Implementation Phasing
+
+| Phase | Items | Effort | Dependencies |
+|---|---|---|---|
+| **Alpha** | T1 (TUI core), T5 (Workflows) | 3w | Bubble Tea dep |
+| **Alpha** | T11 (MCP server), T12a (Image gen via Nano Banana) | 1.5w | Gemini API key |
+| **Beta** | T2 (Parallel agents + Swarm), T8 (Dreams) | 4w | Phase 7.3, Phase 9 |
+| **Beta** | T12b (Audio: Whisper + TTS), T13 (Artifact system) | 2w | API keys |
+| **Beta** | T3 (Conversation browser), T4 (Rich rendering) | 2w | T1 |
+| **Gamma** | T9 (KAIROS proactive), T14 (Model router) | 2w | Phase 9 |
+| **Gamma** | T6 (Session continuity), T7 (Pipeline dashboard) | 2w | T1, CI |
+| **Gamma** | T12c (Video/Music/Avatars) | 2w | API keys |
+| **Delta** | T15 (Multimedia pipeline) | 1w | T12, T13 |
+| **Polish** | T10 (Personality & evolution) | 1w | Stats system |
