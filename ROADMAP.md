@@ -239,3 +239,107 @@ Cross-cutting architectural patterns that span multiple phases:
 ## 🔭 Vision
 
 Long-term aspirational horizons live in [docs/VISION.md](docs/VISION.md). They are not committed to the roadmap but inform architectural decisions today.
+
+---
+
+## 🔧 Phase 13: SDLC Excellence (In Progress)
+
+**Spec:** (to create: `docs/specs/phase-13-sdlc.md`)
+**Depends on:** Phase 7 ✅ (self-evolution foundation), Phase 8 ✅ (observability)
+**Goal:** Full automated development lifecycle — Ivai manages its own work from issue to deploy.
+
+| # | Item | Status | Design | Verifier |
+|---|------|--------|--------|----------|
+| 13.1 | GitHub Issues API Tool (`create_issue`, `list_issues`, `label_issue`) | 🔴 | Ivai creates structured issues from roadmap items, self-assigns, labels by phase | `TestIssueCreation` |
+| 13.2 | Issue Templates (`.github/ISSUE_TEMPLATE/`) | 🔴 | bug.md, feature.md with acceptance criteria, phase linkage | Template renders on new issue |
+| 13.3 | Dashboard CI Badge | 🔴 | Web UI shows current pipeline status (green/red) via GitHub API | `TestCIBadge` |
+| 13.4 | ADR Directory (`docs/adr/`) | 🔴 | Architecture Decision Records: why sqlite-vec over chromem-go, why wazero, etc. Template + first 3 ADRs | `docs/adr/0001-*.md` exists |
+| 13.5 | Rollback (`make rollback`) | 🔴 | Keeps previous binary as `/usr/local/bin/ivai-os.prev`, rollback restores it + restarts | `make rollback` restores prev version |
+| 13.6 | Feature Flags | 🔴 | Env-var based: `IVAI_FEATURE_*=true/false`. New capabilities ship disabled, enabled after staging validation | `TestFeatureFlag` |
+| 13.7 | GitHub Wiki API Tool | 🔴 | Ivai writes capability docs to wiki after each merged PR | `TestWikiUpdate` |
+| 13.8 | Signed Commits (`git commit -S`) | 🔴 | GPG signing configured for Ivai's GitHub identity, verified by branch protection | `TestSignedCommit` |
+| 13.9 | Regression Test Suite | 🔴 | Tests for core reasoning loop, all 7 tool dispatches, buildPayload, SSE streaming | `TestRegressionSuite` |
+| 13.10 | Mermaid Diagrams in Specs | 🔴 | Architecture diagrams in docs/specs/ using mermaid.js blocks | `TestMermaidRender` |
+
+**Design docs referenced:** This phase (solution designs in section below)
+**Architecture impacted:** §2 Cognitive Engine, §5 Interfaces, §7 Web Dashboard
+**VISION link:** [Horizon I — Meta-Cognition](docs/VISION.md#horizon-i-meta-cognition--self-debugging)
+
+### Design Solutions
+
+#### 13.1 GitHub Issues API Tool
+
+Ivai gains `create_issue`, `list_issues`, `label_issue` tools via `gh issue` CLI.
+```
+create_issue(title, body, labels[], assignee?)
+list_issues(state, labels, limit)
+label_issue(number, labels[])
+```
+Creates issues from ROADMAP.md items. Labels map to phases: `phase-6`, `phase-13`, etc.
+Self-assigns to `ivaiber`.
+
+#### 13.2 Issue Templates
+
+Three templates with YAML frontmatter for GitHub's form builder:
+- `bug.md`: Steps to reproduce, expected vs actual, phase
+- `feature.md`: Problem, acceptance criteria, phase, design doc ref
+- `spec.md`: For spec documents — links to ROADMAP item, design decisions
+
+#### 13.3 Dashboard CI Badge
+
+New `Pipeline` tab in Web UI fetches GitHub Actions status via this repo's API:
+```
+GET https://api.github.com/repos/IvanBern/ivai-os/actions/runs?branch=main&per_page=1
+```
+Shows: last run status (✅/❌), timestamp, link to run. Auto-refreshes.
+
+#### 13.4 ADR Directory
+
+Template: `docs/adr/0001-template.md`
+First 3 ADRs: sqlite-vec choice, wazero over docker, embedded Go over microservices.
+
+#### 13.5 Rollback
+
+`make rollback`:
+1. Stops ivai service
+2. `mv /usr/local/bin/ivai-os.prev /usr/local/bin/ivai-os`
+3. Starts ivai service
+4. Keeps current binary as new `.prev` for next rollback
+
+#### 13.6 Feature Flags
+
+Minimal implementation — env var prefix `IVAI_FEATURE_`:
+```go
+func featureEnabled(name string) bool {
+    return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) == "true"
+}
+```
+First flag: `IVAI_FEATURE_RAG=true` — controls RAG context injection.
+
+#### 13.7 GitHub Wiki API Tool
+
+`update_wiki(page, content)` — writes/updates a wiki page via:
+```
+gh api repos/IvanBern/ivai-os/pages -f title="$page" -f content="$content"
+```
+Auto-runs after each merged PR. Documents capabilities, tools, architecture changes.
+
+#### 13.8 Signed Commits
+
+Ivai's VM identity gets a GPG key. Git config: `commit.gpgsign=true`.
+Branch protection requires signed commits.
+
+#### 13.9 Regression Test Suite
+
+`cmd/ivai/main_test.go` additions:
+- `TestAllToolDispatch` — all 7 tools execute without panic
+- `TestReasoningLoopCompletes` — simple task → SSE events → final response
+- `TestBuildPayloadRAG` — RAG context injected when embeddings exist
+- `TestSSEStreamFormat` — valid event: data: format
+
+#### 13.10 Mermaid Diagrams
+
+Add to `docs/specs/` and `ARCHITECTURE.md`:
+- System context diagram
+- Data flow: CLI/Web → HTTP → taskChan → reasoning loop → LLM → tools
+- State machine: Ivai task lifecycle (queued → thinking → tool_call → tool_result → complete/error)

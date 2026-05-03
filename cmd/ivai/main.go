@@ -511,6 +511,23 @@ func buildTools() []llm.Tool {
 				"repo": strProp("Path to the git repository (e.g., /tmp/ivai-sandbox)"),
 			},
 			[]string{"repo"}),
+
+		define("create_issue", "Creates a GitHub Issue. Uses gh CLI. Provide title, body, labels (comma-separated), and optional assignee.",
+			map[string]any{
+				"title":    strProp("Issue title"),
+				"body":     strProp("Issue description"),
+				"labels":   strProp("Comma-separated labels (e.g., bug,phase-13)"),
+				"assignee": strProp("GitHub username to assign (optional)"),
+			},
+			[]string{"title", "body"}),
+
+		define("list_issues", "Lists GitHub Issues with optional filters.",
+			map[string]any{
+				"state":  strProp("open, closed, or all (default: open)"),
+				"labels": strProp("Comma-separated label filter (optional)"),
+				"limit":  strProp("Max issues to return (default: 10)"),
+			},
+			[]string{}),
 	}
 }
 
@@ -687,6 +704,44 @@ func executeCodeHealthTool(argsJSON string) (string, error) {
 	return executeCodeHealth(args.Repo)
 }
 
+func executeCreateIssue(argsJSON string) (string, error) {
+	var args struct {
+		Title    string `json:"title"`
+		Body     string `json:"body"`
+		Labels   string `json:"labels"`
+		Assignee string `json:"assignee"`
+	}
+	json.Unmarshal([]byte(argsJSON), &args)
+	cmd := fmt.Sprintf("gh issue create --repo IvanBern/ivai-os --title %q --body %q", args.Title, args.Body)
+	if args.Labels != "" {
+		cmd += fmt.Sprintf(" --label %q", args.Labels)
+	}
+	if args.Assignee != "" {
+		cmd += fmt.Sprintf(" --assignee %q", args.Assignee)
+	}
+	return tools.ExecuteCommand(cmd)
+}
+
+func executeListIssues(argsJSON string) (string, error) {
+	var args struct {
+		State  string `json:"state"`
+		Labels string `json:"labels"`
+		Limit  string `json:"limit"`
+	}
+	json.Unmarshal([]byte(argsJSON), &args)
+	if args.State == "" {
+		args.State = "open"
+	}
+	if args.Limit == "" {
+		args.Limit = "10"
+	}
+	cmd := fmt.Sprintf("gh issue list --repo IvanBern/ivai-os --state %s --limit %s --json title,state,labels,assignees", args.State, args.Limit)
+	if args.Labels != "" {
+		cmd += fmt.Sprintf(" --label %q", args.Labels)
+	}
+	return tools.ExecuteCommand(cmd)
+}
+
 func resultOrError(result string, err error) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -756,6 +811,14 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 
 	case "code_health":
 		output, err := executeCodeHealthTool(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "create_issue":
+		output, err := executeCreateIssue(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "list_issues":
+		output, err := executeListIssues(tc.Function.Arguments)
 		return resultOrError(output, err)
 
 	default:
