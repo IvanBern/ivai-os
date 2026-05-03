@@ -528,6 +528,9 @@ func buildTools() []llm.Tool {
 				"limit":  strProp("Max issues to return (default: 10)"),
 			},
 			[]string{}),
+
+
+
 		define("update_wiki", "Updates a GitHub Wiki page by cloning the wiki repo, writing a markdown file, committing, and pushing. Provide page title and markdown content.",
 			map[string]any{
 				"page":    strProp("Wiki page title (creates page.md)"),
@@ -562,6 +565,19 @@ func buildTools() []llm.Tool {
 		define("swarm_status", "Checks status of a worker VM or lists all VMs if no name provided.",
 			map[string]any{
 				"name": strProp("Optional VM name. Leave empty to list all VMs."),
+			},
+			[]string{}),
+		define("swarm_spawn", "Spawns a local Ivai worker process on the same host. Much faster than VM workers. Provide name and optional port.",
+			map[string]any{
+				"name": strProp("Worker name (data dir will be /tmp/ivai-<name>)"),
+				"port": strProp("Port for the worker (default: 8081)"),
+			},
+			[]string{"name"}),
+
+		define("swarm_kill", "Kills a local Ivai worker process by port or name.",
+			map[string]any{
+				"port": strProp("Port of the worker to kill"),
+				"name": strProp("Name of the worker to kill"),
 			},
 			[]string{}),
 	}
@@ -997,4 +1013,39 @@ func executeSwarmStatus(argsJSON string) (string, error) {
 		return callVMBridge("/vm/status", map[string]string{"name": a.Name})
 	}
 	return callVMBridge("/vm/list", nil)
+}
+
+func executeSwarmSpawn(argsJSON string) (string, error) {
+	var a struct {
+		Port string `json:"port"`
+		Name string `json:"name"`
+	}
+	json.Unmarshal([]byte(argsJSON), &a)
+	if a.Port == "" {
+		a.Port = "8081"
+	}
+	dataDir := "/tmp/ivai-" + a.Name
+	cmd := fmt.Sprintf("mkdir -p %s && IVAI_DATA_DIR=%s IVAI_PORT=%s nohup /usr/local/bin/ivai-os > /tmp/ivai-%s.log 2>&1 & sleep 2 && curl -s http://localhost:%s/api/status", dataDir, dataDir, a.Port, a.Name, a.Port)
+	out, err := tools.ExecuteCommand(cmd)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`{"worker":"localhost:%s","status":%s}`, a.Port, out), nil
+}
+
+func executeSwarmKill(argsJSON string) (string, error) {
+	var a struct {
+		Port string `json:"port"`
+		Name string `json:"name"`
+	}
+	json.Unmarshal([]byte(argsJSON), &a)
+	if a.Port != "" {
+		tools.ExecuteCommand(fmt.Sprintf("fuser -k %s/tcp 2>/dev/null", a.Port))
+		return fmt.Sprintf("Killed worker on port %s", a.Port), nil
+	}
+	if a.Name != "" {
+		tools.ExecuteCommand(fmt.Sprintf("pkill -f 'ivai-%s' 2>/dev/null", a.Name))
+		return fmt.Sprintf("Killed worker %s", a.Name), nil
+	}
+	return "No port or name specified", nil
 }
