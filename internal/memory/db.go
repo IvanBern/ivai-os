@@ -298,3 +298,22 @@ func (s *Store) GetTaskStats() (TaskStats, error) {
 	}
 	return stats, nil
 }
+
+// GetRecentEmbeddings returns the most recent embeddings with their metadata.
+func (s *Store) GetRecentEmbeddings(limit int) ([]EmbeddingResult, error) {
+	rows, err := s.db.Query("SELECT source, content FROM embeddings ORDER BY id DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []EmbeddingResult
+	for rows.Next() {
+		var r EmbeddingResult
+		if err := rows.Scan(&r.Source, &r.Content); err != nil {
+			continue
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
