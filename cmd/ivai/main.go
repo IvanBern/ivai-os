@@ -992,10 +992,25 @@ func executeSwarmDeploy(argsJSON string) (string, error) {
 	return callVMBridge("/vm/deploy", map[string]string{"name": a.Name})
 }
 
+// resolveWorkerURL builds an HTTP URL for a worker, defaulting to port 8080
+// only when the worker string doesn't already include a port.
+func resolveWorkerURL(worker, path string) string {
+	// Already a full URL with scheme
+	if strings.Contains(worker, "://") {
+		return worker + path
+	}
+	// Already has a port (contains colon but not scheme)
+	if strings.Contains(worker, ":") {
+		return "http://" + worker + path
+	}
+	// Bare hostname — append default port
+	return "http://" + worker + ":8080" + path
+}
+
 func executeSwarmDispatch(argsJSON string) (string, error) {
 	var a struct{ Worker, Task string `json:"worker,instruction"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
+	return tools.HttpRequest("POST", resolveWorkerURL(a.Worker, "/api/task"), 
 		fmt.Sprintf(`{"instruction":%q}`, a.Task),
 		map[string]string{"Content-Type": "application/json"})
 }
@@ -1003,7 +1018,7 @@ func executeSwarmDispatch(argsJSON string) (string, error) {
 func executeSwarmGather(argsJSON string) (string, error) {
 	var a struct{ Worker string `json:"worker"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
+	return tools.HttpRequest("GET", resolveWorkerURL(a.Worker, "/api/task-results?limit=5"), "", nil)
 }
 
 func executeSwarmStatus(argsJSON string) (string, error) {
