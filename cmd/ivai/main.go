@@ -230,6 +230,7 @@ func handleTaskBlocking(w http.ResponseWriter, r *http.Request, taskChan chan<- 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 	var req TaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -258,6 +259,7 @@ func handleTaskStreaming(w http.ResponseWriter, r *http.Request, taskChan chan<-
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 	var req TaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -606,7 +608,7 @@ func buildPayload(dbStore *memory.Store, gateway *llm.Gateway) []llm.Message {
 }
 
 func injectRAGContext(payload []llm.Message, dbStore *memory.Store, gateway *llm.Gateway, history []memory.Message) []llm.Message {
-	if len(history) == 0 {
+	if !featureEnabled("rag") || len(history) == 0 {
 		return payload
 	}
 	latestMsg := history[len(history)-1].Content
@@ -724,6 +726,12 @@ func executeGitHubPR(argsJSON string) (string, error) {
 		Repo  string `json:"repo"`
 	}
 	json.Unmarshal([]byte(argsJSON), &args)
+
+	// Verify gh CLI is authenticated before attempting PR creation
+	if _, err := tools.ExecuteCommand("gh auth status"); err != nil {
+		return "", fmt.Errorf("gh not authenticated: %w", err)
+	}
+
 	base := args.Base
 	if base == "" {
 		base = "main"
@@ -837,6 +845,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 // --- Web Dashboard API Handlers ---
 
 func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -865,6 +877,10 @@ func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) 
 }
 
 func handleMemory(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
@@ -889,6 +905,10 @@ func handleMemory(w http.ResponseWriter, r *http.Request, dbStore *memory.Store)
 }
 
 func handleTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	toolList := buildTools()
 	toolsInfo := make([]map[string]any, 0, len(toolList))
@@ -905,6 +925,10 @@ func handleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleTaskResults(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 20, func(v int) bool { return v > 0 && v <= 200 })
 	results, err := dbStore.GetTaskResults(limit)
@@ -929,6 +953,10 @@ func parseQueryInt(s string, defaultVal int, validate func(int) bool) int {
 }
 
 func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	embCount, _ := dbStore.CountEmbeddings()
 	msgCount, _ := dbStore.CountMessages()
@@ -942,6 +970,10 @@ func handleSystem(w http.ResponseWriter, r *http.Request, dbStore *memory.Store)
 }
 
 func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
 	results, err := dbStore.GetRecentEmbeddings(limit)
@@ -961,15 +993,24 @@ func executeUpdateWiki(argsJSON string) (string, error) {
 		Content string `json:"content"`
 	}
 	json.Unmarshal([]byte(argsJSON), &args)
+
+	// Clone wiki repo
+	cloneCmd := "cd /tmp && rm -rf ivai-wiki && git clone https://github.com/IvanBern/ivai-os.wiki.git ivai-wiki"
+	if _, err := tools.ExecuteCommand(cloneCmd); err != nil {
+		return "", fmt.Errorf("wiki clone failed: %w", err)
+	}
+
+	// Write page via os.WriteFile (avoids heredoc injection risk)
 	filename := args.Page + ".md"
-	cmd := fmt.Sprintf("cd /tmp && rm -rf ivai-wiki && git clone https://github.com/IvanBern/ivai-os.wiki.git ivai-wiki && cd ivai-wiki && cat > %s << 'WIKIEOF'\n%s\nWIKIEOF\n && git add %s && git commit -m 'update %s' && git push", filename, args.Content, filename, args.Page)
+	if err := os.WriteFile("/tmp/ivai-wiki/"+filename, []byte(args.Content), 0644); err != nil {
+		return "", fmt.Errorf("wiki write failed: %w", err)
+	}
+
+	// Commit and push
+	cmd := fmt.Sprintf("cd /tmp/ivai-wiki && git add %s && git commit -m 'update %s' && git push", filename, args.Page)
 	return tools.ExecuteCommand(cmd)
 }
 
-func shellQuote(s string) string {
-	q := fmt.Sprintf("%q", s)
-	return q
-}
 func featureEnabled(name string) bool {
 	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
 }
