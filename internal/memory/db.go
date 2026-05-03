@@ -2,7 +2,9 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"math"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
@@ -45,6 +47,14 @@ func NewStore(dbPath string) (*Store, error) {
 		response TEXT DEFAULT '',
 		error_msg TEXT DEFAULT '',
 		duration_ms INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS embeddings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		source TEXT NOT NULL DEFAULT '',
+		content TEXT NOT NULL,
+		embedding BLOB NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
 
@@ -156,4 +166,105 @@ func (s *Store) GetTaskResults(limit int) ([]TaskResult, error) {
 		results = append(results, tr)
 	}
 	return results, nil
+}
+
+// SaveEmbedding stores a text embedding for semantic search.
+func (s *Store) SaveEmbedding(source, content string, embedding []float64) error {
+	data, err := json.Marshal(embedding)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec("INSERT INTO embeddings (source, content, embedding) VALUES (?, ?, ?)", source, content, data)
+	return err
+}
+
+// EmbeddingResult holds a search result with similarity score.
+type EmbeddingResult struct {
+	Source     string  `json:"source"`
+	Content    string  `json:"content"`
+	Similarity float64 `json:"similarity"`
+}
+
+// SearchSimilar finds the most semantically similar stored embeddings.
+func (s *Store) SearchSimilar(queryEmbedding []float64, limit int) ([]EmbeddingResult, error) {
+	candidates, err := s.loadRecentEmbeddings(200)
+	if err != nil {
+		return nil, err
+	}
+	return scoreAndRank(queryEmbedding, candidates, limit), nil
+}
+
+func (s *Store) loadRecentEmbeddings(limit int) ([]candidate, error) {
+	rows, err := s.db.Query("SELECT source, content, embedding FROM embeddings ORDER BY id DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		var embJSON []byte
+		if err := rows.Scan(&c.source, &c.content, &embJSON); err != nil {
+			continue
+		}
+		json.Unmarshal(embJSON, &c.embedding)
+		candidates = append(candidates, c)
+	}
+	return candidates, nil
+}
+
+type candidate struct {
+	source    string
+	content   string
+	embedding []float64
+}
+
+type scoredResult struct {
+	source     string
+	content    string
+	similarity float64
+}
+
+func scoreAndRank(queryEmb []float64, candidates []candidate, limit int) []EmbeddingResult {
+	var scored []scoredResult
+	for _, c := range candidates {
+		sim := cosineSimilarity(queryEmb, c.embedding)
+		if sim > 0.3 {
+			scored = append(scored, scoredResult{c.source, c.content, sim})
+		}
+	}
+	sortScoredBySimilarity(scored)
+	if limit > 0 && len(scored) > limit {
+		scored = scored[:limit]
+	}
+	results := make([]EmbeddingResult, len(scored))
+	for i, s := range scored {
+		results[i] = EmbeddingResult{Source: s.source, Content: s.content, Similarity: s.similarity}
+	}
+	return results
+}
+
+func sortScoredBySimilarity(scored []scoredResult) {
+	for i := 1; i < len(scored); i++ {
+		for j := i; j > 0 && scored[j].similarity > scored[j-1].similarity; j-- {
+			scored[j], scored[j-1] = scored[j-1], scored[j]
+		}
+	}
+}
+
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
