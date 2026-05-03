@@ -992,28 +992,131 @@ func executeSwarmDeploy(argsJSON string) (string, error) {
 	return callVMBridge("/vm/deploy", map[string]string{"name": a.Name})
 }
 
+// workerURL normalizes a worker address for HTTP requests.
+// If the address already contains a port (e.g., "localhost:8081"), it is returned unchanged.
+// Otherwise, ":8080" is appended (e.g., "192.168.1.5" → "192.168.1.5:8080").
+func workerURL(addr string) string {
+	if strings.Contains(addr, ":") {
+		return addr
+	}
+	return addr + ":8080"
+}
+
 func executeSwarmDispatch(argsJSON string) (string, error) {
-	var a struct{ Worker, Task string `json:"worker,instruction"` }
+	var a struct {
+		Worker      string `json:"worker"`
+		Instruction string `json:"instruction"`
+	}
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
-		fmt.Sprintf(`{"instruction":%q}`, a.Task),
+	return tools.HttpRequest("POST", "http://"+workerURL(a.Worker)+"/api/task",
+		fmt.Sprintf(`{"instruction":%q}`, a.Instruction),
 		map[string]string{"Content-Type": "application/json"})
 }
 
 func executeSwarmGather(argsJSON string) (string, error) {
 	var a struct{ Worker string `json:"worker"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
+	return tools.HttpRequest("GET", "http://"+workerURL(a.Worker)+"/api/task-results?limit=5", "", nil)
 }
 
 func executeSwarmStatus(argsJSON string) (string, error) {
 	var a struct{ Name string `json:"name"` }
 	json.Unmarshal([]byte(argsJSON), &a)
 	if a.Name != "" {
+		// Check local worker first, then fall back to VM bridge
+		if status := checkLocalWorker(a.Name); status != "" {
+			return status, nil
+		}
 		return callVMBridge("/vm/status", map[string]string{"name": a.Name})
 	}
-	return callVMBridge("/vm/list", nil)
+	// List all: merge VM workers from bridge + local workers
+	vmList, vmErr := callVMBridge("/vm/list", nil)
+	localList := listLocalWorkers()
+	if localList == "" {
+		return vmList, vmErr
+	}
+	if vmErr != nil {
+		return localList, nil
+	}
+	// Merge: wrap both results into a single JSON object
+	return mergeWorkerLists(vmList, localList), nil
 }
+
+// checkLocalWorker probes a local worker by name. Returns its /api/status JSON or "" if not found.
+func checkLocalWorker(name string) string {
+	port := localWorkerPort(name)
+	if port == "" {
+		return ""
+	}
+	resp, err := tools.HttpRequest("GET", "http://localhost:"+port+"/api/status", "", nil)
+	if err != nil {
+		return ""
+	}
+	return resp
+}
+
+// listLocalWorkers scans /tmp/ivai-* directories for active local workers and returns a JSON array.
+func listLocalWorkers() string {
+	entries, err := os.ReadDir("/tmp")
+	if err != nil {
+		return ""
+	}
+	var workers []map[string]any
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "ivai-") {
+			continue
+		}
+		name := strings.TrimPrefix(e.Name(), "ivai-")
+		port := localWorkerPort(name)
+		if port == "" {
+			continue
+		}
+		resp, err := tools.HttpRequest("GET", "http://localhost:"+port+"/api/status", "", nil)
+		if err != nil {
+			continue
+		}
+		workers = append(workers, map[string]any{
+			"name":   name,
+			"type":   "local",
+			"port":   port,
+			"status": json.RawMessage(resp),
+		})
+	}
+	if len(workers) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(workers)
+	return string(b)
+}
+
+// localWorkerPort reads the port from a local worker's .env file in /tmp/ivai-<name>.
+func localWorkerPort(name string) string {
+	envPath := "/tmp/ivai-" + name + "/.env"
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "IVAI_PORT=") {
+			return strings.TrimPrefix(strings.TrimSpace(line), "IVAI_PORT=")
+		}
+	}
+	return ""
+}
+
+// mergeWorkerLists merges a VM bridge result and a local worker JSON array into one JSON object.
+func mergeWorkerLists(vmResult, localResult string) string {
+	// vmResult is expected to be a JSON array or object from the bridge;
+	// localResult is a JSON array from listLocalWorkers.
+	// Wrap both under "vm_workers" and "local_workers" keys.
+	merged := map[string]any{
+		"vm_workers":    json.RawMessage(vmResult),
+		"local_workers": json.RawMessage(localResult),
+	}
+	b, _ := json.Marshal(merged)
+	return string(b)
+}
+
 
 func executeSwarmSpawn(argsJSON string) (string, error) {
 	var a struct {
