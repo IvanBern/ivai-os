@@ -1,5 +1,89 @@
 # Ivai OS v0.1.0: Technical Architecture Specification
 
+## System Context
+
+```mermaid
+graph TB
+    subgraph "Operator"
+        WEB[Web Dashboard]
+        CLI[ivaictl CLI]
+        GH[GitHub]
+    end
+    subgraph "Ivai OS Kernel"
+        HTTP[HTTP Server :8080]
+        CHAN[taskChan buffer:10]
+        LOOP[Reasoning Loop]
+        GW[LLM Gateway]
+        TOOLS[Tool Dispatch]
+    end
+    subgraph "Memory"
+        SQLITE[(SQLite memory.db)]
+        VEC[(Embeddings)]
+        TASK[(Task Results)]
+    end
+    subgraph "External"
+        DS[DeepSeek API]
+        AN[Anthropic API]
+        GM[Gemini API]
+        CS[CodeScene CLI]
+    end
+    WEB -->|SSE| HTTP
+    CLI -->|JSON| HTTP
+    HTTP --> CHAN --> LOOP
+    LOOP --> GW --> DS & AN & GM
+    LOOP --> TOOLS --> SQLITE & VEC & TASK
+    LOOP --> CS
+    LOOP -->|PR| GH
+```
+
+## Data Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User (Web/CLI)
+    participant H as HTTP Server
+    participant C as taskChan
+    participant R as Reasoning Loop
+    participant G as LLM Gateway
+    participant T as Tool Dispatch
+
+    U->>H: POST /api/task/stream {instruction}
+    H->>C: taskWithResponder
+    C->>R: processTask()
+    R->>R: buildPayload (RAG)
+    loop Reasoning
+        R->>G: Chat(messages, tools)
+        G-->>R: Message{tool_calls?}
+        alt has tool_calls
+            R->>T: executeToolCall()
+            T-->>R: result
+            R->>R: appendToolResults()
+        else no tool_calls
+            R->>U: SSE task_complete
+        end
+    end
+    R->>SQLite: SaveTaskResult()
+    R->>SQLite: SaveEmbedding()
+```
+
+## Task Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Queued: POST /api/task
+    Queued --> Running: processTask()
+    Running --> Thinking: LLM call
+    Thinking --> ToolCall: tool_calls > 0
+    Thinking --> Complete: no tool_calls
+    ToolCall --> ToolResult: executeToolCall()
+    ToolResult --> Thinking: append to payload
+    ToolCall --> Error: tool fails
+    Thinking --> Error: LLM error
+    Complete --> Tracked: SaveTaskResult()
+    Error --> Tracked: SaveTaskResult()
+    Tracked --> [*]
+```
+
 Ivai OS has transitioned from a simple Go script to a daemonized, agentic operating system kernel. This document specifies the current internal architecture and subsystems.
 
 ## 1. Core Architecture (The Kernel)

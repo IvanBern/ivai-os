@@ -554,6 +554,9 @@ func buildPayload(dbStore *memory.Store, gateway *llm.Gateway) []llm.Message {
 }
 
 func injectRAGContext(payload []llm.Message, dbStore *memory.Store, gateway *llm.Gateway, history []memory.Message) []llm.Message {
+	if !featureEnabled("rag") {
+		return payload
+	}
 	if len(history) == 0 {
 		return payload
 	}
@@ -945,4 +948,8 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.St
 		results = []memory.EmbeddingResult{}
 	}
 	json.NewEncoder(w).Encode(map[string]any{"embeddings": results})
+}
+
+func featureEnabled(name string) bool {
+	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
 }

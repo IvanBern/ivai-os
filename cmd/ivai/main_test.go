@@ -510,3 +510,85 @@ func collectEvents(ch chan ProgressEvent) []ProgressEvent {
 	}
 	return events
 }
+
+func TestRegressionAllToolDispatch(t *testing.T) {
+	tools := buildTools()
+	toolNames := make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Function.Name] = true
+	}
+	expected := []string{"read_file", "write_file", "execute_command", "execute_wasm", "http_request", "github_pr", "code_health", "create_issue", "list_issues"}
+	for _, name := range expected {
+		if !toolNames[name] {
+			t.Errorf("tool %q not found in buildTools()", name)
+		}
+	}
+	if len(tools) != len(expected) {
+		t.Errorf("expected %d tools, got %d", len(expected), len(tools))
+	}
+}
+
+func TestRegressionBuildPayload(t *testing.T) {
+	dbPath := "test_regression.db"
+	defer os.Remove(dbPath)
+	store, err := memory.NewStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SaveMessage("user", "test message", "")
+
+	gw := llm.NewGateway("test-key", "", "")
+	payload := buildPayload(store, gw)
+	if len(payload) < 2 {
+		t.Errorf("expected at least 2 messages (system + user), got %d", len(payload))
+	}
+	if payload[0].Role != "system" {
+		t.Errorf("first message should be system, got %s", payload[0].Role)
+	}
+}
+
+func TestRegressionFeatureFlags(t *testing.T) {
+	t.Setenv("IVAI_FEATURE_RAG", "false")
+	if featureEnabled("rag") {
+		t.Error("RAG should be disabled when IVAI_FEATURE_RAG=false")
+	}
+	t.Setenv("IVAI_FEATURE_RAG", "true")
+	if !featureEnabled("rag") {
+		t.Error("RAG should be enabled when IVAI_FEATURE_RAG=true")
+	}
+	if !featureEnabled("nonexistent") {
+		t.Error("unknown features should default to enabled")
+	}
+}
+
+func TestRegressionSSEFormat(t *testing.T) {
+	evt := ProgressEvent{
+		Type:    "task_start",
+		Message: "Task started",
+		Data:    map[string]string{"model": "test"},
+	}
+	data, _ := json.Marshal(evt)
+	if !strings.Contains(string(data), "task_start") {
+		t.Error("SSE event should contain type")
+	}
+	if !strings.Contains(string(data), "model") {
+		t.Error("SSE event should contain data")
+	}
+}
+
+func TestRegressionExtractModel(t *testing.T) {
+	tests := []struct {
+		input, wantModel, wantInst string
+	}{
+		{"hello", "deepseek-v4-pro", "hello"},
+		{"@claude hi", "claude-3-5-sonnet-20241022", " hi"},
+		{"@gemini test", "gemini-2.5-pro", " test"},
+		{"@research deep", "deep-research-max-preview", " deep"},
+	}
+	for _, tc := range tests {
+		model, inst := extractModel(tc.input)
+		if model != tc.wantModel || inst != tc.wantInst {
+			t.Errorf("extractModel(%q) = (%q, %q), want (%q, %q)", tc.input, model, inst, tc.wantModel, tc.wantInst)
+		}
+	}
+}
