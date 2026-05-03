@@ -549,20 +549,20 @@ func buildTools() []llm.Tool {
 			},
 			[]string{"name"}),
 
-		define("swarm_dispatch", "Sends a task to a worker VM for execution.",
+		define("swarm_dispatch", "Sends a task to a worker (VM or local) for execution.",
 			map[string]any{
 				"worker":      strProp("Worker VM hostname or IP (e.g., 192.168.139.x)"),
 				"instruction": strProp("Task instruction to execute"),
 			},
 			[]string{"worker", "instruction"}),
 
-		define("swarm_gather", "Collects task results from a worker VM.",
+		define("swarm_gather", "Collects task results from a worker (VM or local).",
 			map[string]any{
 				"worker": strProp("Worker VM hostname or IP"),
 			},
 			[]string{"worker"}),
 
-		define("swarm_status", "Checks status of a worker VM or lists all VMs if no name provided.",
+		define("swarm_status", "Checks status of a worker (VM or local) or lists all workers if no name provided.",
 			map[string]any{
 				"name": strProp("Optional VM name. Leave empty to list all VMs."),
 			},
@@ -995,7 +995,11 @@ func executeSwarmDeploy(argsJSON string) (string, error) {
 func executeSwarmDispatch(argsJSON string) (string, error) {
 	var a struct{ Worker, Task string `json:"worker,instruction"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
+	workerHost := a.Worker
+	if !strings.Contains(workerHost, ":") {
+		workerHost = workerHost + ":8080"
+	}
+	return tools.HttpRequest("POST", "http://"+workerHost+"/api/task",
 		fmt.Sprintf(`{"instruction":%q}`, a.Task),
 		map[string]string{"Content-Type": "application/json"})
 }
@@ -1003,16 +1007,83 @@ func executeSwarmDispatch(argsJSON string) (string, error) {
 func executeSwarmGather(argsJSON string) (string, error) {
 	var a struct{ Worker string `json:"worker"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
+	workerHost := a.Worker
+	if !strings.Contains(workerHost, ":") {
+		workerHost = workerHost + ":8080"
+	}
+	return tools.HttpRequest("GET", "http://"+workerHost+"/api/task-results?limit=5", "", nil)
 }
 
 func executeSwarmStatus(argsJSON string) (string, error) {
 	var a struct{ Name string `json:"name"` }
 	json.Unmarshal([]byte(argsJSON), &a)
+
+	localWorkers := getLocalSwarmWorkers()
+
 	if a.Name != "" {
+		// Check local workers first
+		for _, w := range localWorkers {
+			if w["name"] == a.Name {
+				port := w["port"]
+				status, err := tools.HttpRequest("GET", "http://localhost:"+port+"/api/status", "", nil)
+				if err == nil {
+					return fmt.Sprintf(`{"type":"local","name":"%s","port":"%s","status":%s}`, a.Name, port, status), nil
+				}
+				return fmt.Sprintf(`{"type":"local","name":"%s","port":"%s","running":true}`, a.Name, port), nil
+			}
+		}
 		return callVMBridge("/vm/status", map[string]string{"name": a.Name})
 	}
-	return callVMBridge("/vm/list", nil)
+
+	// List all: both local and VM
+	var result strings.Builder
+	result.WriteString("## Local Workers\n")
+	if len(localWorkers) == 0 {
+		result.WriteString("(none)\n")
+	} else {
+		for _, w := range localWorkers {
+			result.WriteString(fmt.Sprintf("- %s (port: %s)\n", w["name"], w["port"]))
+		}
+	}
+	result.WriteString("\n## VM Workers\n")
+	vmList, _ := callVMBridge("/vm/list", nil)
+	result.WriteString(vmList)
+	return result.String(), nil
+}
+
+
+func getLocalSwarmWorkers() []map[string]string {
+	out, err := tools.ExecuteCommand("pgrep -f 'ivai-os' 2>/dev/null")
+	if err != nil || strings.TrimSpace(out) == "" {
+		return nil
+	}
+	var workers []map[string]string
+	for _, pidStr := range strings.Fields(out) {
+		envOut, _ := tools.ExecuteCommand(fmt.Sprintf("cat /proc/%s/environ 2>/dev/null | tr '\\0' '\\n' | grep -E 'IVAI_DATA_DIR=|IVAI_PORT=' | paste -sd' '", pidStr))
+		envOut = strings.TrimSpace(envOut)
+		if envOut == "" {
+			continue
+		}
+		if !strings.Contains(envOut, "/tmp/ivai-") {
+			continue
+		}
+		info := map[string]string{}
+		for _, pair := range strings.Fields(envOut) {
+			parts := strings.SplitN(pair, "=", 2)
+			if len(parts) == 2 {
+				info[parts[0]] = parts[1]
+			}
+		}
+		if dir, ok := info["IVAI_DATA_DIR"]; ok {
+			info["name"] = strings.TrimPrefix(dir, "/tmp/ivai-")
+		}
+		if _, ok := info["IVAI_PORT"]; !ok {
+			info["IVAI_PORT"] = "unknown"
+		}
+		info["port"] = info["IVAI_PORT"]
+		workers = append(workers, info)
+	}
+	return workers
 }
 
 func executeSwarmSpawn(argsJSON string) (string, error) {
