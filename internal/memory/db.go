@@ -70,3 +70,42 @@ func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
 	}
 	return messages, nil
 }
+
+// CountMessages returns the total number of stored messages.
+func (s *Store) CountMessages() (int, error) {
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// DashboardMessage includes metadata for the web dashboard.
+type DashboardMessage struct {
+	ID               int    `json:"id"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	CreatedAt        string `json:"created_at"`
+}
+
+// GetAllMessages returns all messages with timestamps for the dashboard.
+func (s *Store) GetAllMessages(limit, offset int) ([]DashboardMessage, error) {
+	query := `SELECT id, role, content, reasoning_content, created_at FROM messages ORDER BY id DESC LIMIT ? OFFSET ?`
+
+	rows, err := s.db.Query(query, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []DashboardMessage
+	for rows.Next() {
+		var msg DashboardMessage
+		if err := rows.Scan(&msg.ID, &msg.Role, &msg.Content, &msg.ReasoningContent, &msg.CreatedAt); err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
+	}
+	return messages, nil
+}

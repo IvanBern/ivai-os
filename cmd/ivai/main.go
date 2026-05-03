@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -42,6 +44,11 @@ type taskWithResponder struct {
 	progressChan chan<- ProgressEvent // optional SSE progress channel
 }
 
+//go:embed SYSTEM_PROMPT.md
+var systemPromptTemplate string
+
+var startTime = time.Now()
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -68,11 +75,11 @@ func main() {
 
 	taskChan := make(chan taskWithResponder, 10)
 
-	port := resolvePort()
-	server := startHTTPServer(port, taskChan)
-	startCLI(taskChan)
-
 	gateway, dbStore, wasmEngine := initDependencies(dbPath)
+
+	port := resolvePort()
+	server := startHTTPServer(port, taskChan, gateway, dbStore)
+	startCLI(taskChan)
 
 	slog.Info("Ivai OS is now running. Awaiting input via CLI or port " + port + ".")
 	runEventLoop(ctx, taskChan, server, gateway, dbStore, wasmEngine)
@@ -155,13 +162,32 @@ func shutdownServer(server *http.Server) {
 	slog.Info("Ivai OS gracefully stopped.")
 }
 
-func startHTTPServer(port string, taskChan chan<- taskWithResponder) *http.Server {
+func startHTTPServer(port string, taskChan chan<- taskWithResponder, gateway *llm.Gateway, dbStore *memory.Store) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/task", func(w http.ResponseWriter, r *http.Request) {
 		handleTaskBlocking(w, r, taskChan)
 	})
 	mux.HandleFunc("/api/task/stream", func(w http.ResponseWriter, r *http.Request) {
 		handleTaskStreaming(w, r, taskChan)
+	})
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		handleStatus(w, r, gateway)
+	})
+	mux.HandleFunc("/api/memory", func(w http.ResponseWriter, r *http.Request) {
+		handleMemory(w, r, dbStore)
+	})
+	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
+		handleTools(w, r)
+	})
+
+	// Serve embedded web dashboard
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(dashboardHTML))
+			return
+		}
+		http.NotFound(w, r)
 	})
 
 	server := &http.Server{
@@ -431,10 +457,7 @@ func buildPayload(dbStore *memory.Store) []llm.Message {
 	history, _ := dbStore.GetRecentMessages(10)
 	homeDir, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
-	systemPrompt := fmt.Sprintf(
-		"You are Ivai, an advanced AI Operating System. Your home directory is %s. You are currently running in %s. Use your tools to interact with the filesystem. You have 'git' installed.",
-		homeDir, cwd,
-	)
+	systemPrompt := fmt.Sprintf(systemPromptTemplate, homeDir, cwd)
 
 	payload := []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -597,4 +620,80 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 	default:
 		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 	}
+}
+
+// --- Web Dashboard API Handlers ---
+
+func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) {
+	w.Header().Set("Content-Type", "application/json")
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	activeModel := "deepseek-v4-pro"
+	models := []map[string]string{
+		{"id": "deepseek-v4-pro", "provider": "DeepSeek", "available": strconv.FormatBool(gateway.DeepSeekKey != "")},
+		{"id": "claude-3-5-sonnet-20241022", "provider": "Anthropic", "available": strconv.FormatBool(gateway.AnthropicKey != "")},
+		{"id": "gemini-2.5-pro", "provider": "Gemini", "available": strconv.FormatBool(gateway.GeminiKey != "")},
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"version":       "0.1.0",
+		"uptime_sec":    int(time.Since(startTime).Seconds()),
+		"go_version":    runtime.Version(),
+		"goroutines":    runtime.NumGoroutine(),
+		"heap_alloc_mb": float64(m.Alloc) / 1024 / 1024,
+		"num_cpu":       runtime.NumCPU(),
+		"os":            runtime.GOOS,
+		"arch":          runtime.GOARCH,
+		"active_model":  activeModel,
+		"models":        models,
+	})
+}
+
+func handleMemory(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	w.Header().Set("Content-Type", "application/json")
+
+	limit := parseQueryInt(r.URL.Query().Get("limit"), 50, func(v int) bool { return v > 0 && v <= 200 })
+	offset := parseQueryInt(r.URL.Query().Get("offset"), 0, func(v int) bool { return v >= 0 })
+
+	total, _ := dbStore.CountMessages()
+	messages, err := dbStore.GetAllMessages(limit, offset)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	if messages == nil {
+		messages = []memory.DashboardMessage{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"total":    total,
+		"limit":    limit,
+		"offset":   offset,
+		"messages": messages,
+	})
+}
+
+func handleTools(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	toolList := buildTools()
+	toolsInfo := make([]map[string]any, 0, len(toolList))
+	for _, t := range toolList {
+		toolsInfo = append(toolsInfo, map[string]any{
+			"name":        t.Function.Name,
+			"description": t.Function.Description,
+			"parameters":  t.Function.Parameters,
+		})
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"tools": toolsInfo,
+	})
+}
+
+func parseQueryInt(s string, defaultVal int, validate func(int) bool) int {
+	v, err := strconv.Atoi(s)
+	if err != nil || !validate(v) {
+		return defaultVal
+	}
+	return v
 }
