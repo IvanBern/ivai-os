@@ -9,7 +9,7 @@ TEST_RESULTS=test-results
 GOPATH=$(shell go env GOPATH)
 PATH:=$(GOPATH)/bin:$(PATH)
 
-.PHONY: tidy build build-cli build-cli-linux deploy service run clean dev install-cli test test-reports deploy-secrets install-test-tools
+.PHONY: tidy build build-cli build-cli-linux deploy service run clean dev install-cli test test-reports deploy-secrets install-test-tools stop
 
 tidy:
 	go mod tidy
@@ -110,3 +110,9 @@ run-local:
 clean:
 	rm -f $(BINARY_NAME) $(CLI_NAME)
 	rm -rf $(TEST_RESULTS)
+
+stop:
+	@echo "🛑 Stopping local Ivai OS..."
+	@pkill -f "cmd/ivai" 2>/dev/null || true
+	@lsof -ti:8080 -ti:8081 2>/dev/null | xargs kill 2>/dev/null || true
+	@echo "✅ Ivai OS stopped."
