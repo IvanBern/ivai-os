@@ -20,7 +20,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body --jq .body)
-
           errors=0
 
           check_section() {
@@ -48,15 +47,24 @@ jobs:
             echo "⚠️  Test Results section may not contain actual test output"
           fi
 
-          if echo "$PR_BODY" | grep -q "No issues found! (10.0)"; then
-            echo "⚠️  Code Health section looks like a template"
+          # Extract Code Health section content
+          CS_SECTION=$(echo "$PR_BODY" | sed -n '/## Code Health/,/## /p' | sed '$d')
+          
+          # Must contain actual cs delta output patterns, not just a template summary
+          if echo "$CS_SECTION" | grep -qE "Complex Method|Bumpy Road|Code Duplication|Deep.*Complexity|Primitive Obsession|Excess Number|String Heavy|Large Method|No issues found"; then
+            echo "✅ Code Health section contains actual cs delta output"
+          else
+            echo "❌ Code Health section appears to be a template. Must contain actual cs delta output."
+            echo "   Run: cs delta main <branch> | grep -v DEBUG"
+            errors=$((errors + 1))
           fi
 
           if [ "$errors" -gt 0 ]; then
             echo ""
             echo "Required format: ## Summary, ## Changes, ## Test Results, ## Code Health, ## Checklist"
-            echo "Use --body-file with gh pr create, never --body."
+            echo "Code Health must contain actual cs delta output, not a template."
             exit 1
           fi
 
+          echo ""
           echo "✅ PR description format validated"
