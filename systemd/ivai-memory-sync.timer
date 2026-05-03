@@ -1,0 +1,10 @@
+[Unit]
+Description=Ivai Memory Manager Timer — runs every 5 minutes
+Requires=ivai-memory-sync.service
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Ivai Memory Manager — sync external state to crush memory
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ivai
+WorkingDirectory=/home/ivai
+ExecStart=/usr/local/bin/ivai-memory-sync
+StandardOutput=journal
+StandardError=journal

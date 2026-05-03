@@ -995,11 +995,11 @@ func executeSwarmDeploy(argsJSON string) (string, error) {
 // workerURL normalizes a worker address for HTTP requests.
 // If the address already contains a port (e.g., "localhost:8081"), it is returned unchanged.
 // Otherwise, ":8080" is appended (e.g., "192.168.1.5" → "192.168.1.5:8080").
-func workerURL(addr string) string {
-	if strings.Contains(addr, ":") {
-		return addr
+func workerURL(host, path string) string {
+	if strings.Contains(host, ":") {
+		return "http://" + host + path
 	}
-	return addr + ":8080"
+	return "http://" + host + ":8080" + path
 }
 
 func executeSwarmDispatch(argsJSON string) (string, error) {
@@ -1008,7 +1008,7 @@ func executeSwarmDispatch(argsJSON string) (string, error) {
 		Instruction string `json:"instruction"`
 	}
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("POST", "http://"+workerURL(a.Worker)+"/api/task",
+	return tools.HttpRequest("POST", workerURL(a.Worker, "/api/task/stream"),
 		fmt.Sprintf(`{"instruction":%q}`, a.Instruction),
 		map[string]string{"Content-Type": "application/json"})
 }
@@ -1016,7 +1016,7 @@ func executeSwarmDispatch(argsJSON string) (string, error) {
 func executeSwarmGather(argsJSON string) (string, error) {
 	var a struct{ Worker string `json:"worker"` }
 	json.Unmarshal([]byte(argsJSON), &a)
-	return tools.HttpRequest("GET", "http://"+workerURL(a.Worker)+"/api/task-results?limit=5", "", nil)
+	return tools.HttpRequest("GET", workerURL(a.Worker, "/api/task-results?limit=20"), "", nil)
 }
 
 func executeSwarmStatus(argsJSON string) (string, error) {

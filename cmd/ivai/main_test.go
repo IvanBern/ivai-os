@@ -616,19 +616,19 @@ func TestSwarmToolRegistryComplete(t *testing.T) {
 
 func TestWorkerURL(t *testing.T) {
 	tests := []struct {
-		input, want string
+		host, path, want string
 	}{
-		{"192.168.1.5", "192.168.1.5:8080"},
-		{"localhost", "localhost:8080"},
-		{"localhost:8081", "localhost:8081"},
-		{"192.168.1.5:9090", "192.168.1.5:9090"},
-		{"worker.example.com", "worker.example.com:8080"},
-		{"worker.example.com:443", "worker.example.com:443"},
+		{"192.168.1.5", "/api/test", "http://192.168.1.5:8080/api/test"},
+		{"localhost", "/api/status", "http://localhost:8080/api/status"},
+		{"localhost:8081", "/api/task/stream", "http://localhost:8081/api/task/stream"},
+		{"192.168.1.5:9090", "/api/task-results?limit=5", "http://192.168.1.5:9090/api/task-results?limit=5"},
+		{"worker.example.com", "/api/task/stream", "http://worker.example.com:8080/api/task/stream"},
+		{"worker.example.com:443", "/", "http://worker.example.com:443/"},
 	}
 	for _, tc := range tests {
-		got := workerURL(tc.input)
+		got := workerURL(tc.host, tc.path)
 		if got != tc.want {
-			t.Errorf("workerURL(%q) = %q, want %q", tc.input, got, tc.want)
+			t.Errorf("workerURL(%q, %q) = %q, want %q", tc.host, tc.path, got, tc.want)
 		}
 	}
 }
@@ -687,8 +687,8 @@ func TestSwarmDispatchUsesWorkerURL(t *testing.T) {
 	if result == "" {
 		t.Error("executeSwarmDispatch returned empty result")
 	}
-	if capturedPath != "/api/task" {
-		t.Errorf("expected path /api/task, got %q", capturedPath)
+	if capturedPath != "/api/task/stream" {
+		t.Errorf("expected path /api/task/stream, got %q", capturedPath)
 	}
 	if capturedMethod != "POST" {
 		t.Errorf("expected POST, got %s", capturedMethod)

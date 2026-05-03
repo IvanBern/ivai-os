@@ -1,0 +1,103 @@
+# Memory Manager Agent — keeps Ivai's crush memory synchronized with the external world.
+#
+# Runs on schedule (every 5 min) and via webhook trigger. Polls GitHub, git, swarm,
+# and local system state, diffs against last known state, writes crush memory files.
+
+agent: memory-manager
+description: >
+  Synchronizes Ivai's situational awareness by polling external sources
+  and writing structured crush memory files for new events and changes.
+
+triggers:
+  - schedule: "*/5 * * * *"
+  - webhook: "/webhook/github"
+
+tools:
+  - execute_command
+  - http_request
+  - write_file
+  - read_file
+
+state_file: /home/ivai/.crush/memory/.state.json
+
+poll:
+  github:
+    - name: new_commits
+      command: "git -C /home/ivai/ivai-os-source fetch origin && git -C /home/ivai/ivai-os-source log --oneline origin/main ^main"
+      importance: high
+    - name: open_prs
+      command: "gh pr list --state open --json number,title,author,headRefName,createdAt,labels"
+      importance: medium
+      filter: "author == 'ivai' or label includes 'ivai'"
+    - name: ci_status
+      command: "gh run list --limit 10 --json status,conclusion,displayTitle,headBranch,createdAt"
+      importance: high_if_failure
+    - name: open_issues
+      command: "gh issue list --state open --label bug --json number,title,author,createdAt"
+      importance: medium
+
+  swarm:
+    - name: worker_health
+      command: "swarm_status"
+      importance: medium
+
+  system:
+    - name: memory_db_size
+      command: "du -sh /home/ivai/memory.db"
+      importance: low
+    - name: disk_usage
+      command: "df -h /home/ivai | grep -E '^/dev'"
+      importance: low
+
+webhooks:
+  pull_request:
+    events: [opened, closed, synchronize]
+    filter:
+      relevant_authors: ["ivai", "IvanBern"]
+  push:
+    events: [push]
+    filter:
+      branches: ["main", "staging"]
+  check_run:
+    events: [completed]
+    filter:
+      conclusion: ["failure", "action_required"]
+
+output:
+  directory: /home/ivai/.crush/memory/
+  filename_pattern: "YYYY-MM-DD-{slug}.md"
+  template: |
+    {summary}
+
+    ## source
+    - {source_type}: {source_detail}
+
+    ## what changed
+    {bullets}
+
+    ## implications for ivai
+    - {implication}
+
+    {tags}
+
+importance_rules:
+  - if: author == "ivai" → always_write
+  - if: ci_conclusion == "failure" → always_write
+  - if: label includes "bug" or "critical" → always_write
+  - if: file_changes include "cmd/ivai/**" or "internal/**" → always_write
+  - if: type == "dependabot" or "renovate" → skip
+  - if: pr_age > 7_days and no_activity → skip
+
+dedup:
+  method: content_hash
+  store: .state.json → seen_hashes[]
+  ttl: 24_hours
+
+state_schema:
+  last_sync: "ISO8601"
+  last_commit_seen: "sha"
+  open_prs_seen: ["number"]
+  worker_states: {"name": "healthy|dead|unknown"}
+  memory_db_size_bytes: 12345
+  disk_usage_pct: 45
+  seen_hashes: ["hash1"]
