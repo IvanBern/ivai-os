@@ -39,7 +39,10 @@ func handleReadFile(_ context.Context, args string, _ *sandbox.WasmRuntime) (str
 }
 
 func handleWriteFile(_ context.Context, args string, _ *sandbox.WasmRuntime) (string, error) {
-	var a struct{ Filepath, Content string `json:"filepath,content"` }
+	var a struct {
+		Filepath string `json:"filepath"`
+		Content  string `json:"content"`
+	}
 	json.Unmarshal([]byte(args), &a)
 	return "ok", tools.WriteFile(a.Filepath, a.Content)
 }
@@ -51,7 +54,12 @@ func handleExecCommand(_ context.Context, args string, _ *sandbox.WasmRuntime) (
 }
 
 func handleHTTPReq(_ context.Context, args string, _ *sandbox.WasmRuntime) (string, error) {
-	var a struct{ Method, URL, Body string; Headers map[string]string `json:"method,url,body,headers"` }
+	var a struct {
+		Method  string            `json:"method"`
+		URL     string            `json:"url"`
+		Body    string            `json:"body"`
+		Headers map[string]string `json:"headers"`
+	}
 	json.Unmarshal([]byte(args), &a)
 	return tools.HttpRequest(a.Method, a.URL, a.Body, a.Headers)
 }
