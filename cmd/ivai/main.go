@@ -1025,7 +1025,7 @@ func executeSwarmSpawn(argsJSON string) (string, error) {
 		a.Port = "8081"
 	}
 	dataDir := "/tmp/ivai-" + a.Name
-	cmd := fmt.Sprintf("mkdir -p %s && IVAI_DATA_DIR=%s IVAI_PORT=%s nohup /usr/local/bin/ivai-os > /tmp/ivai-%s.log 2>&1 & sleep 2 && curl -s http://localhost:%s/api/status", dataDir, dataDir, a.Port, a.Name, a.Port)
+	cmd := fmt.Sprintf("mkdir -p %s && cp /etc/ivai/.env %s/.env 2>/dev/null; IVAI_DATA_DIR=%s IVAI_PORT=%s setsid /usr/local/bin/ivai-os < /dev/null > /tmp/ivai-%s.log 2>&1 & sleep 3 && curl -s http://localhost:%s/api/status", dataDir, dataDir, dataDir, a.Port, a.Name, a.Port)
 	out, err := tools.ExecuteCommand(cmd)
 	if err != nil {
 		return "", err
