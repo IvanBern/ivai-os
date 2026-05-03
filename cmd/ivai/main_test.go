@@ -611,3 +611,164 @@ func TestSwarmToolRegistryComplete(t *testing.T) {
 		}
 	}
 }
+
+// --- Swarm Bug-Fix Tests ---
+
+func TestWorkerURL(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"192.168.1.5", "192.168.1.5:8080"},
+		{"localhost", "localhost:8080"},
+		{"localhost:8081", "localhost:8081"},
+		{"192.168.1.5:9090", "192.168.1.5:9090"},
+		{"worker.example.com", "worker.example.com:8080"},
+		{"worker.example.com:443", "worker.example.com:443"},
+	}
+	for _, tc := range tests {
+		got := workerURL(tc.input)
+		if got != tc.want {
+			t.Errorf("workerURL(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestLocalWorkerPortReadsEnv(t *testing.T) {
+	os.MkdirAll("/tmp/ivai-testport", 0755)
+	os.WriteFile("/tmp/ivai-testport/.env", []byte("IVAI_PORT=9092\n"), 0644)
+	defer os.RemoveAll("/tmp/ivai-testport")
+
+	port := localWorkerPort("testport")
+	if port != "9092" {
+		t.Errorf("localWorkerPort(testport) = %q, want 9092", port)
+	}
+
+	port = localWorkerPort("nonexistent")
+	if port != "" {
+		t.Errorf("localWorkerPort(nonexistent) = %q, want \"\"", port)
+	}
+}
+
+func TestMergeWorkerListsProducesValidJSON(t *testing.T) {
+	vmResult := `[{"name":"vm1","status":"ok"}]`
+	localResult := `[{"name":"worker1","port":"8081"}]`
+	merged := mergeWorkerLists(vmResult, localResult)
+
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(merged), &result); err != nil {
+		t.Fatalf("mergeWorkerLists produced invalid JSON: %v", err)
+	}
+	if _, ok := result["vm_workers"]; !ok {
+		t.Error("merged result missing vm_workers key")
+	}
+	if _, ok := result["local_workers"]; !ok {
+		t.Error("merged result missing local_workers key")
+	}
+}
+
+func TestSwarmDispatchUsesWorkerURL(t *testing.T) {
+	// Verify executeSwarmDispatch sends request to the correct URL via workerURL
+	var capturedPath, capturedMethod string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		capturedMethod = r.Method
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"response":"ok"}`))
+	}))
+	defer mockServer.Close()
+
+	addr := mockServer.URL[strings.Index(mockServer.URL, "://")+3:]
+	if strings.HasPrefix(addr, ":") { addr = "127.0.0.1" + addr }
+
+	result, err := executeSwarmDispatch(`{"worker":"` + addr + `","instruction":"test"}`)
+	if err != nil {
+		t.Fatalf("executeSwarmDispatch failed: %v", err)
+	}
+	if result == "" {
+		t.Error("executeSwarmDispatch returned empty result")
+	}
+	if capturedPath != "/api/task" {
+		t.Errorf("expected path /api/task, got %q", capturedPath)
+	}
+	if capturedMethod != "POST" {
+		t.Errorf("expected POST, got %s", capturedMethod)
+	}
+}
+
+func TestSwarmGatherUsesWorkerURL(t *testing.T) {
+	var capturedPath string
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"response":"result1"}]`))
+	}))
+	defer mockServer.Close()
+
+	addr := mockServer.URL[strings.Index(mockServer.URL, "://")+3:]
+	if strings.HasPrefix(addr, ":") { addr = "127.0.0.1" + addr }
+
+	result, err := executeSwarmGather(`{"worker":"` + addr + `"}`)
+	if err != nil {
+		t.Fatalf("executeSwarmGather failed: %v", err)
+	}
+	if result == "" {
+		t.Error("executeSwarmGather returned empty result")
+	}
+	if capturedPath != "/api/task-results" {
+		t.Errorf("expected path /api/task-results, got %q", capturedPath)
+	}
+}
+
+func TestCheckLocalWorkerIntegration(t *testing.T) {
+	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"version":"0.1.0","uptime_sec":42}`))
+	}))
+	defer mockWorker.Close()
+
+	// Extract port from mock server URL
+	url := mockWorker.URL
+	port := url[strings.LastIndex(url, ":")+1:]
+
+	workerName := "testcheckint"
+	os.MkdirAll("/tmp/ivai-"+workerName, 0755)
+	os.WriteFile("/tmp/ivai-"+workerName+"/.env", []byte("IVAI_PORT="+port+"\n"), 0644)
+	defer os.RemoveAll("/tmp/ivai-" + workerName)
+
+	status := checkLocalWorker(workerName)
+	if !strings.Contains(status, "42") {
+		t.Errorf("checkLocalWorker returned: %s (expected uptime_sec:42)", status)
+	}
+
+	// Nonexistent worker returns empty
+	if got := checkLocalWorker("nonexistent99"); got != "" {
+		t.Errorf("checkLocalWorker for nonexistent = %q, want \"\"", got)
+	}
+}
+
+func TestListLocalWorkersFindsActiveWorkers(t *testing.T) {
+	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer mockWorker.Close()
+
+	url := mockWorker.URL
+	port := url[strings.LastIndex(url, ":")+1:]
+
+	workerName := "testlist"
+	os.MkdirAll("/tmp/ivai-"+workerName, 0755)
+	os.WriteFile("/tmp/ivai-"+workerName+"/.env", []byte("IVAI_PORT="+port+"\n"), 0644)
+	defer os.RemoveAll("/tmp/ivai-" + workerName)
+
+	result := listLocalWorkers()
+	if result == "" {
+		t.Error("listLocalWorkers returned empty, expected at least one worker")
+	}
+	if !strings.Contains(result, workerName) {
+		t.Errorf("listLocalWorkers result missing worker name %q: %s", workerName, result)
+	}
+	if !strings.Contains(result, `"type":"local"`) {
+		t.Errorf("listLocalWorkers result missing type field: %s", result)
+	}
+}
