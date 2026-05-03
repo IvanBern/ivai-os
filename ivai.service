@@ -7,10 +7,10 @@ Type=simple
 User=ivai
 Group=ivai
 WorkingDirectory=/etc/ivai
+Environment=IVAI_PORT=8080
 ExecStart=/usr/local/bin/ivai-os
 Restart=always
 RestartSec=5
-# Ensure the logs are captured by journald
 StandardOutput=journal
 StandardError=journal
 
