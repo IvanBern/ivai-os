@@ -83,7 +83,7 @@ deploy: build build-cli-linux
 	@echo "🚀 Shipping binaries to Debian VM..."
 	scp $(BINARY_NAME) $(CLI_NAME)-linux $(VM_TARGET):~/
 	@echo "🔒 Securing binaries..."
-	ssh $(VM_TARGET) "sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo mv ~/$(CLI_NAME)-linux /usr/local/bin/$(CLI_NAME) && sudo chown ivai:ivai $(BIN_DEST) /usr/local/bin/$(CLI_NAME) && sudo chmod +x $(BIN_DEST) /usr/local/bin/$(CLI_NAME)"
+	ssh $(VM_TARGET) "sudo cp $(BIN_DEST) $(BIN_DEST).prev 2>/dev/null; sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo mv ~/$(CLI_NAME)-linux /usr/local/bin/$(CLI_NAME) && sudo chown ivai:ivai $(BIN_DEST) /usr/local/bin/$(CLI_NAME) && sudo chmod +x $(BIN_DEST) /usr/local/bin/$(CLI_NAME)"
 	@echo "✅ Deployment complete!"
 
 # 2.1 Deploy environment secrets
@@ -143,3 +143,8 @@ deploy-staging: build
 	@scp $(BINARY_NAME) ivai-os-linux@ai-server:~/
 	@ssh ivai-os-linux@ai-server "sudo mv ~/$(BINARY_NAME) /usr/local/bin/ivai-os-staging && sudo chmod +x /usr/local/bin/ivai-os-staging && sudo pkill -f ivai-os-staging 2>/dev/null; IVAI_PORT=8099 /usr/local/bin/ivai-os-staging &"
 	@echo "✅ Staging deployed on ai-server:8099"
+
+.PHONY: rollback
+rollback:
+	@echo "⏪ Rolling back Ivai OS..."
+	@ssh $(VM_TARGET) "sudo systemctl stop ivai && test -f /usr/local/bin/ivai-os.prev && sudo mv /usr/local/bin/ivai-os /usr/local/bin/ivai-os.bad && sudo mv /usr/local/bin/ivai-os.prev /usr/local/bin/ivai-os && sudo systemctl start ivai && echo '✅ Rolled back' || echo '❌ No previous binary found'"
