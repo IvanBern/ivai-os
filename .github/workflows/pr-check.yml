@@ -1,0 +1,66 @@
+name: PR Description Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR description format
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body --jq .body)
+
+          errors=0
+
+          check_section() {
+            if ! echo "$PR_BODY" | grep -q "$1"; then
+              echo "❌ Missing section: $1"
+              errors=$((errors + 1))
+            else
+              echo "✅ Section found: $1"
+            fi
+          }
+
+          # Must be multi-line (not a one-liner)
+          lines=$(echo "$PR_BODY" | wc -l)
+          if [ "$lines" -lt 5 ]; then
+            echo "❌ PR body is too short ($lines lines). Must use --body-file, not --body."
+            errors=$((errors + 1))
+          fi
+
+          check_section "## Summary"
+          check_section "## Changes"
+          check_section "## Test Results"
+          check_section "## Code Health"
+          check_section "## Checklist"
+
+          # Test Results must contain actual output
+          if ! echo "$PR_BODY" | grep -q "ok.*github.com/IvanBern/ivai-os"; then
+            echo "⚠️  Test Results section may not contain actual test output"
+          fi
+
+          # Code Health must contain actual cs delta output, not a template
+          if echo "$PR_BODY" | grep -q "No issues found! (10.0)"; then
+            echo "⚠️  Code Health section looks like a template — make sure it's real cs delta output"
+          fi
+
+          if [ "$errors" -gt 0 ]; then
+            echo ""
+            echo "PR description must follow the template:"
+            echo "  ## Summary"
+            echo "  ## Changes"
+            echo "  ## Test Results"
+            echo "  ## Code Health"
+            echo "  ## Checklist"
+            echo ""
+            echo "Use --body-file with gh pr create, never --body."
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ PR description format validated"
