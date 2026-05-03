@@ -47,12 +47,19 @@ type taskWithResponder struct {
 //go:embed SYSTEM_PROMPT.md
 var systemPromptTemplate string
 
+// Build-time variables injected via ldflags (see Makefile).
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildDate = "unknown"
+)
+
 var startTime = time.Now()
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
-	slog.Info("Ivai OS starting up...", "version", "0.1.0")
+	slog.Info("Ivai OS starting up...", "version", Version, "commit", Commit, "built", BuildDate)
 
 	tp, err := telemetry.InitTracer("ivai-os")
 	if err != nil {
@@ -178,6 +185,9 @@ func startHTTPServer(port string, taskChan chan<- taskWithResponder, gateway *ll
 	})
 	mux.HandleFunc("/api/tools", func(w http.ResponseWriter, r *http.Request) {
 		handleTools(w, r)
+	})
+	mux.HandleFunc("/api/task-results", func(w http.ResponseWriter, r *http.Request) {
+		handleTaskResults(w, r, dbStore)
 	})
 
 	// Serve embedded web dashboard
@@ -368,8 +378,25 @@ func processTask(ctx context.Context, in TaskInput, progressChan chan<- Progress
 
 	state.emit(ProgressEvent{Type: "task_start", Message: "Task started", Data: map[string]string{"model": model, "instruction": instruction}})
 
+	startTime := time.Now()
 	payload := buildPayload(in.DBStore)
 	result := runReasoningLoop(ctx, payload, state)
+	duration := time.Since(startTime).Milliseconds()
+
+	// Track result for self-evolution
+	success := !strings.HasPrefix(result, "Error: ")
+	errMsg := ""
+	if !success {
+		errMsg = result
+	}
+	in.DBStore.SaveTaskResult(memory.TaskResult{
+		Instruction: instruction,
+		Model:       model,
+		Success:     success,
+		Response:    result,
+		ErrorMsg:    errMsg,
+		DurationMs:  duration,
+	})
 
 	// Close progress channel when done (if it exists) to signal completion to SSE handler.
 	if progressChan != nil {
@@ -450,6 +477,14 @@ func buildTools() []llm.Tool {
 				"headers": map[string]any{"type": "object", "description": "HTTP headers (optional)"},
 			},
 			[]string{"method", "url"}),
+
+		define("github_pr", "Creates a GitHub Pull Request from the current branch. Uses the gh CLI (must be authenticated). Provide title, body, and optionally a base branch.",
+			map[string]any{
+				"title": strProp("Pull request title"),
+				"body":  strProp("Pull request description"),
+				"base":  strProp("Target branch (default: main)"),
+			},
+			[]string{"title", "body"}),
 	}
 }
 
@@ -559,6 +594,20 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+func executeGitHubPR(argsJSON string) (string, error) {
+	var args struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+		Base  string `json:"base"`
+	}
+	json.Unmarshal([]byte(argsJSON), &args)
+	base := args.Base
+	if base == "" {
+		base = "main"
+	}
+	return tools.ExecuteCommand(fmt.Sprintf("gh pr create --title %q --body %q --base %s", args.Title, args.Body, base))
+}
+
 func resultOrError(result string, err error) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -617,6 +666,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		return resultOrError(tools.HttpRequest(args.Method, args.URL, args.Body, args.Headers))
 
+	case "github_pr":
+		output, err := executeGitHubPR(tc.Function.Arguments)
+		return resultOrError(output, err)
+
 	default:
 		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 	}
@@ -637,7 +690,9 @@ func handleStatus(w http.ResponseWriter, r *http.Request, gateway *llm.Gateway) 
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
-		"version":       "0.1.0",
+		"version":       Version,
+		"commit":        Commit,
+		"build_date":    BuildDate,
 		"uptime_sec":    int(time.Since(startTime).Seconds()),
 		"go_version":    runtime.Version(),
 		"goroutines":    runtime.NumGoroutine(),
@@ -687,6 +742,22 @@ func handleTools(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(map[string]any{
 		"tools": toolsInfo,
+	})
+}
+
+func handleTaskResults(w http.ResponseWriter, r *http.Request, dbStore *memory.Store) {
+	w.Header().Set("Content-Type", "application/json")
+	limit := parseQueryInt(r.URL.Query().Get("limit"), 20, func(v int) bool { return v > 0 && v <= 200 })
+	results, err := dbStore.GetTaskResults(limit)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	if results == nil {
+		results = []memory.TaskResult{}
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"results": results,
 	})
 }
 

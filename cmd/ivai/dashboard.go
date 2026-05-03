@@ -1,5 +1,6 @@
 package main
 
+
 const dashboardHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -98,7 +99,7 @@ const dashboardHTML = `<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <div><span class="dot"></span><strong>Ivai OS</strong> v0.1.0</div>
+  <div><span class="dot"></span><strong>Ivai OS</strong> __VERSION__</div>
   <nav>
     <button class="active" data-tab="dashboard">Dashboard</button>
     <button data-tab="console">Task Console</button>
@@ -357,3 +358,4 @@ setInterval(loadStatus, 30000);
 </script>
 </body>
 </html>`
+

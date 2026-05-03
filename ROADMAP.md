@@ -83,6 +83,8 @@
 | 5.4 | Directory Whitelisting | 🔴 | `TestPathTraversalBlocked` |
 | 5.5 | cgroups Resource Limits | 🔴 | `TestMemoryCapEnforced` |
 | 5.6 | Egress Filtering | 🔴 | `TestOutboundBlocked` |
+| 5.7 | Web Admin Dashboard (status, SSE console, memory, tools) | 🟢 (bc5ab9d) | `TestDashboardEndpoint` |
+| 5.8 | Self-Knowledge System Prompt (`//go:embed SYSTEM_PROMPT.md`) | 🟢 (bc5ab9d) | `TestSystemPromptEmbed` |
 
 **Architecture impacted:** §1 Core, §4 Execution, §5 Interfaces
 
@@ -92,13 +94,14 @@
 
 **Spec:** (to create: `docs/specs/phase-6-intelligence.md`)
 **Depends on:** Phase 2 ✅
-**Blocks:** Phase 7, Phase 9, Phase 12
+**Blocks:** Phase 7 (RAG needed for self-evolution), Phase 9, Phase 12
 
 | # | Item | Status | Verifier |
 |---|------|--------|----------|
-| 6.1 | Embedded Vector Database (`sqlite-vec` or `chromem-go`) | 🔴 | `TestVectorSearch` |
-| 6.2 | RAG Pipeline (auto-search past context before LLM) | 🔴 | `TestRAGInjection` |
-| 6.3 | Dynamic Model Discovery (`/v1/models` cache) | 🔴 | `TestModelDiscovery` |
+| 6.1 | Task Result Tracking (`task_results` table: success, error, duration, tokens) | 🔴 | `TestTaskResults` |
+| 6.2 | Embedded Vector Database (`sqlite-vec` or `chromem-go`) | 🔴 | `TestVectorSearch` |
+| 6.3 | RAG Pipeline (auto-search past context before LLM) | 🔴 | `TestRAGInjection` |
+| 6.4 | Dynamic Model Discovery (`/v1/models` cache) | 🔴 | `TestModelDiscovery` |
 
 **Design docs referenced:** [MEMORY-MODEL.md](docs/designs/MEMORY-MODEL.md) (data model for Episodic + Semantic tables)
 **Architecture impacted:** §3 Memory, §2 Cognitive Engine
@@ -109,13 +112,14 @@
 ## 🤖 Phase 7: Self-Evolution & Parallelism
 
 **Spec:** (to create: `docs/specs/phase-7-self-evolution.md`)
-**Depends on:** Phase 4 ✅, Phase 6
+**Depends on:** Phase 4 ✅, Phase 5.8 ✅ (self-knowledge prompt in place), Phase 6.1 (task tracking for feedback loop)
 **Blocks:** Phase 10, Phase 11, Phase 12
 
 | # | Item | Status | Verifier |
 |---|------|--------|----------|
+| 7.0 | Self-Knowledge Foundation (anatomy, sandbox PR workflow in SYSTEM_PROMPT.md) | 🟢 (bc5ab9d) | `TestSelfKnowledge` |
 | 7.1 | MCP Tool Registry (cross-agent tool discovery) | 🔴 | `TestToolRegistry` |
-| 7.2 | GitHub API Access (clone, commit, PR) | 🔴 | `TestGitHubAPI` |
+| 7.2 | GitHub API Access (clone, commit, PR) | 🟡 | `TestGitHubAPI` |
 | 7.3 | Sub-Agent Spawning (child processes for parallel tasks) | 🔴 | `TestSubAgentSpawn` |
 | 7.4 | Self-Modification Loop (branch → implement → test → PR) | 🔴 | `TestSelfModification` |
 
@@ -136,6 +140,7 @@
 | 8.1 | OpenTelemetry Tracer (initialized) | 🟢 | `TestOTelInit` |
 | 8.2 | OTel Exporters (Jaeger, OTLP, stdout) | 🔴 | `TestJaegerExport` |
 | 8.3 | Span Enrichment (model, tool args, timing) | 🔴 | `TestSpanAttributes` |
+| 8.4 | Makefile `stop` target (kill local Ivai process) | 🟢 (3accdf6) | `make stop` |
 
 **Architecture impacted:** §6 Observability
 

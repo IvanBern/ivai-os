@@ -35,6 +35,17 @@ func NewStore(dbPath string) (*Store, error) {
 		content TEXT NOT NULL,
 		reasoning_content TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS task_results (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		instruction TEXT NOT NULL,
+		model TEXT NOT NULL DEFAULT '',
+		success INTEGER NOT NULL DEFAULT 0,
+		response TEXT DEFAULT '',
+		error_msg TEXT DEFAULT '',
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -48,27 +59,6 @@ func NewStore(dbPath string) (*Store, error) {
 func (s *Store) SaveMessage(role, content, reasoning string) error {
 	_, err := s.db.Exec("INSERT INTO messages (role, content, reasoning_content) VALUES (?, ?, ?)", role, content, reasoning)
 	return err
-}
-
-// GetRecentMessages retrieves the last N messages to build the LLM context window
-func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
-	query := `SELECT role, content, reasoning_content FROM (SELECT id, role, content, reasoning_content FROM messages ORDER BY id DESC LIMIT ?) ORDER BY id ASC`
-
-	rows, err := s.db.Query(query, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var messages []Message
-	for rows.Next() {
-		var msg Message
-		if err := rows.Scan(&msg.Role, &msg.Content, &msg.ReasoningContent); err != nil {
-			return nil, err
-		}
-		messages = append(messages, msg)
-	}
-	return messages, nil
 }
 
 // CountMessages returns the total number of stored messages.
@@ -89,23 +79,81 @@ type DashboardMessage struct {
 	CreatedAt        string `json:"created_at"`
 }
 
+// GetRecentMessages retrieves the last N messages to build the LLM context window.
+func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
+	return queryMessageRows(s,
+		`SELECT role, content, reasoning_content FROM (SELECT id, role, content, reasoning_content FROM messages ORDER BY id DESC LIMIT ?) ORDER BY id ASC`,
+		[]any{limit},
+		func(msg *Message) []any { return []any{&msg.Role, &msg.Content, &msg.ReasoningContent} },
+	)
+}
+
 // GetAllMessages returns all messages with timestamps for the dashboard.
 func (s *Store) GetAllMessages(limit, offset int) ([]DashboardMessage, error) {
-	query := `SELECT id, role, content, reasoning_content, created_at FROM messages ORDER BY id DESC LIMIT ? OFFSET ?`
+	return queryMessageRows(s,
+		`SELECT id, role, content, reasoning_content, created_at FROM messages ORDER BY id DESC LIMIT ? OFFSET ?`,
+		[]any{limit, offset},
+		func(msg *DashboardMessage) []any { return []any{&msg.ID, &msg.Role, &msg.Content, &msg.ReasoningContent, &msg.CreatedAt} },
+	)
+}
 
-	rows, err := s.db.Query(query, limit, offset)
+func queryMessageRows[T any](s *Store, query string, args []any, fields func(*T) []any) ([]T, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var messages []DashboardMessage
+	var results []T
 	for rows.Next() {
-		var msg DashboardMessage
-		if err := rows.Scan(&msg.ID, &msg.Role, &msg.Content, &msg.ReasoningContent, &msg.CreatedAt); err != nil {
+		var item T
+		if err := rows.Scan(fields(&item)...); err != nil {
 			return nil, err
 		}
-		messages = append(messages, msg)
+		results = append(results, item)
 	}
-	return messages, nil
+	return results, nil
+}
+
+// TaskResult records the outcome of a processed task for self-evolution.
+type TaskResult struct {
+	ID          int    `json:"id"`
+	Instruction string `json:"instruction"`
+	Model       string `json:"model"`
+	Success     bool   `json:"success"`
+	Response    string `json:"response,omitempty"`
+	ErrorMsg    string `json:"error_msg,omitempty"`
+	DurationMs  int64  `json:"duration_ms"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// SaveTaskResult records a task outcome.
+func (s *Store) SaveTaskResult(tr TaskResult) error {
+	_, err := s.db.Exec(
+		"INSERT INTO task_results (instruction, model, success, response, error_msg, duration_ms) VALUES (?, ?, ?, ?, ?, ?)",
+		tr.Instruction, tr.Model, tr.Success, tr.Response, tr.ErrorMsg, tr.DurationMs,
+	)
+	return err
+}
+
+// GetTaskResults returns recent task results for analysis.
+func (s *Store) GetTaskResults(limit int) ([]TaskResult, error) {
+	rows, err := s.db.Query(
+		"SELECT id, instruction, model, success, response, error_msg, duration_ms, created_at FROM task_results ORDER BY id DESC LIMIT ?",
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []TaskResult
+	for rows.Next() {
+		var tr TaskResult
+		if err := rows.Scan(&tr.ID, &tr.Instruction, &tr.Model, &tr.Success, &tr.Response, &tr.ErrorMsg, &tr.DurationMs, &tr.CreatedAt); err != nil {
+			return nil, err
+		}
+		results = append(results, tr)
+	}
+	return results, nil
 }

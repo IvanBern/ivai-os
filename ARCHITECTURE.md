@@ -42,6 +42,22 @@ Ivai OS has transitioned from a simple Go script to a daemonized, agentic operat
 - **Structured Logging**: JSON-format `slog` output to stdout, piped to `journald` on production VMs. Key events: task routing, tool execution, task completion, LLM errors.
 - **OpenTelemetry Tracing**: Foundation initialized — spans created for reasoning steps and tool execution. Exporters (Jaeger/OTLP) pending in Phase 8.
 
+## 7. Web Dashboard (The Control Panel)
+
+- **Single-Page App**: Self-contained HTML/CSS/JS embedded via `//go:embed` in `cmd/ivai/dashboard.go`. Zero external dependencies.
+- **Four Tabs**:
+  - **Dashboard** — runtime stats (uptime, Go version, goroutines, heap, OS/arch), LLM provider status (ready/no-key per provider), auto-refreshes every 30s.
+  - **Task Console** — SSE stream viewer with real-time event rendering. Color-coded events (blue=start, purple=thinking, amber=tool_call, orange=tool_result, green=complete, red=error). Uses `fetch` + `ReadableStream` for SSE parsing.
+  - **Memory** — paginated conversation history from SQLite (`GET /api/memory?limit=N&offset=M`). Color-coded role badges, content/reasoning columns, timestamps.
+  - **Tools** — lists all 5 tools with parameter names, types, and required status.
+- **API Endpoints Added**: `GET /api/status` (runtime info), `GET /api/memory` (paginated messages), `GET /api/tools` (tool listing).
+
+## 8. Self-Knowledge (The Identity)
+
+- **Externalized System Prompt**: `cmd/ivai/SYSTEM_PROMPT.md` — plain Markdown embedded at build time via `//go:embed`. Ivai knows its own anatomy: config files, memory DB schema, build/deploy process, sandbox PR workflow.
+- **Self-Provisioning via Crush**: Ivai writes to `.crush/memory/*.md` to teach its operator's AI assistant about its capabilities — the same mechanism Crush used to add the CodeScene code health rule.
+- **Safe Self-Modification**: Ivai is instructed to clone source to `/tmp/ivai-sandbox`, modify there, run `go build && go test`, and create a Pull Request — never modify its own running `cmd/` or `internal/` directly.
+
 ---
 
 ## 🛡️ Security Posture

@@ -9,6 +9,12 @@ TEST_RESULTS=test-results
 GOPATH=$(shell go env GOPATH)
 PATH:=$(GOPATH)/bin:$(PATH)
 
+# Build-time version injection (git describe, commit hash, UTC date).
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LDFLAGS = -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildDate=$(BUILD_DATE)
+
 .PHONY: tidy build build-cli build-cli-linux deploy service run clean dev install-cli test test-reports deploy-secrets install-test-tools stop
 
 tidy:
@@ -17,17 +23,17 @@ tidy:
 # 1. Compile for the Debian VM
 build:
 	@echo "🔨 Cross-compiling for Linux ARM64..."
-	GOOS=linux GOARCH=arm64 go build -o $(BINARY_NAME) $(MAIN_PATH)
+	GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) $(MAIN_PATH)
 
 # 1.5 Compile the Mac CLI
 build-cli:
 	@echo "🍎 Building macOS CLI..."
-	go build -o $(CLI_NAME) $(CLI_PATH)
+	go build -ldflags="$(LDFLAGS)" -o $(CLI_NAME) $(CLI_PATH)
 
 # 1.6 Compile the CLI for Linux ARM64
 build-cli-linux:
 	@echo "🐧 Building Linux ARM64 CLI..."
-	GOOS=linux GOARCH=arm64 go build -o $(CLI_NAME)-linux $(CLI_PATH)
+	GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(CLI_NAME)-linux $(CLI_PATH)
 
 install-cli: build-cli
 	@echo "🚚 Installing ivaictl to /usr/local/bin..."
