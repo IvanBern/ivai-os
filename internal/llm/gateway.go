@@ -142,9 +142,10 @@ type Gateway struct {
 	HTTPClient   *http.Client
 
 	// Base URLs for testing
-	DeepSeekURL  string
-	AnthropicURL string
-	GeminiURL    string
+	DeepSeekURL     string
+	AnthropicURL    string
+	GeminiURL       string
+	DeepSeekEmbedURL string
 }
 
 func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
@@ -155,10 +156,49 @@ func NewGateway(deepSeekKey, anthropicKey, geminiKey string) *Gateway {
 		HTTPClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
-		DeepSeekURL:  "https://api.deepseek.com/chat/completions",
-		AnthropicURL: "https://api.anthropic.com/v1/messages",
-		GeminiURL:    "https://generativelanguage.googleapis.com/v1beta/models",
+		DeepSeekURL:      "https://api.deepseek.com/chat/completions",
+		AnthropicURL:     "https://api.anthropic.com/v1/messages",
+		GeminiURL:        "https://generativelanguage.googleapis.com/v1beta/models",
+		DeepSeekEmbedURL: "https://api.deepseek.com/v1/embeddings",
 	}
+}
+
+// --- Embedding API ---
+
+type EmbeddingRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type EmbeddingResponse struct {
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
+}
+
+// Embed generates an embedding vector for the given text using DeepSeek.
+func (g *Gateway) Embed(ctx context.Context, text string) ([]float64, error) {
+	reqBody := EmbeddingRequest{
+		Model: "deepseek-chat",
+		Input: text,
+	}
+
+	var embResp EmbeddingResponse
+	if err := g.doProviderRequest(ctx, providerCall{
+		url:      g.DeepSeekEmbedURL,
+		body:     reqBody,
+		headers:  map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + g.DeepSeekKey},
+		provider: "DeepSeek",
+		target:   &embResp,
+	}); err != nil {
+		return nil, err
+	}
+
+	if len(embResp.Data) == 0 {
+		return nil, fmt.Errorf("DeepSeek embeddings returned no data")
+	}
+
+	return embResp.Data[0].Embedding, nil
 }
 
 func (g *Gateway) Chat(ctx context.Context, messages []Message, tools []Tool, model string) (Message, error) {

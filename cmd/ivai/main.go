@@ -379,7 +379,7 @@ func processTask(ctx context.Context, in TaskInput, progressChan chan<- Progress
 	state.emit(ProgressEvent{Type: "task_start", Message: "Task started", Data: map[string]string{"model": model, "instruction": instruction}})
 
 	startTime := time.Now()
-	payload := buildPayload(in.DBStore)
+	payload := buildPayload(in.DBStore, in.Gateway)
 	result := runReasoningLoop(ctx, payload, state)
 	duration := time.Since(startTime).Milliseconds()
 
@@ -397,6 +397,15 @@ func processTask(ctx context.Context, in TaskInput, progressChan chan<- Progress
 		ErrorMsg:    errMsg,
 		DurationMs:  duration,
 	})
+
+	// Auto-embed the instruction for future semantic recall (fire and forget)
+	go func() {
+		emb, err := in.Gateway.Embed(context.Background(), instruction)
+		if err != nil {
+			return
+		}
+		in.DBStore.SaveEmbedding("instruction", instruction, emb)
+	}()
 
 	// Close progress channel when done (if it exists) to signal completion to SSE handler.
 	if progressChan != nil {
@@ -489,15 +498,18 @@ func buildTools() []llm.Tool {
 	}
 }
 
-func buildPayload(dbStore *memory.Store) []llm.Message {
+func buildPayload(dbStore *memory.Store, gateway *llm.Gateway) []llm.Message {
 	history, _ := dbStore.GetRecentMessages(10)
 	homeDir, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
-	systemPrompt := fmt.Sprintf(systemPromptTemplate, homeDir, cwd)
 
 	payload := []llm.Message{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: fmt.Sprintf(systemPromptTemplate, homeDir, cwd)},
 	}
+
+	// RAG: inject semantically similar past context
+	payload = injectRAGContext(payload, dbStore, gateway, history)
+
 	for _, msg := range history {
 		payload = append(payload, llm.Message{
 			Role:             msg.Role,
@@ -506,6 +518,26 @@ func buildPayload(dbStore *memory.Store) []llm.Message {
 		})
 	}
 	return payload
+}
+
+func injectRAGContext(payload []llm.Message, dbStore *memory.Store, gateway *llm.Gateway, history []memory.Message) []llm.Message {
+	if len(history) == 0 {
+		return payload
+	}
+	latestMsg := history[len(history)-1].Content
+	emb, err := gateway.Embed(context.Background(), latestMsg)
+	if err != nil {
+		return payload
+	}
+	similar, err := dbStore.SearchSimilar(emb, 3)
+	if err != nil || len(similar) == 0 {
+		return payload
+	}
+	ragCtx := "## Relevant Past Context (from semantic memory)\n"
+	for i, s := range similar {
+		ragCtx += fmt.Sprintf("%d. [%.0f%% match] %s\n", i+1, s.Similarity*100, s.Content)
+	}
+	return append(payload, llm.Message{Role: "system", Content: ragCtx})
 }
 
 func runReasoningLoop(ctx context.Context, payload []llm.Message, s *taskState) string {
