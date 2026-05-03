@@ -53,3 +53,10 @@ func TestHttpRequestError(t *testing.T) {
 		t.Errorf("expected body %s, got %s", expectedBody, resp)
 	}
 }
+
+func TestHttpRequestConnectionRefused(t *testing.T) {
+	_, err := HttpRequest("GET", "http://127.0.0.1:1", "", nil)
+	if err == nil {
+		t.Error("expected error for connection refused")
+	}
+}

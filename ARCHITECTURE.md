@@ -86,12 +86,38 @@ stateDiagram-v2
 
 Ivai OS has transitioned from a simple Go script to a daemonized, agentic operating system kernel. This document specifies the current internal architecture and subsystems.
 
+## Source Tree
+
+```
+cmd/
+├── ivai/                     # Main binary (~15 files)
+│   ├── main.go               # Minimal startup, HTTP handlers, CLI, event loop
+│   ├── process.go            # TaskInput, taskState, reasoning loop, payload builder, RAG
+│   ├── tools.go              # defineTool, buildTools (core/github/swarm), executeToolCall
+│   ├── github_tools.go       # GitHub PR, issues, code health, wiki executors
+│   ├── swarm.go              # VM worker swarm: clone/deploy/dispatch/gather/status/spawn/kill
+│   ├── tool_registry.go      # Handler dispatch map (tool name → Go function)
+│   ├── dashboard.go          # Single-page web dashboard (embedded HTML/CSS/JS)
+│   ├── SYSTEM_PROMPT.md      # Ivai's self-knowledge (embedded at build)
+│   └── main_test.go          # Tests for processTask, SSE, regression, swarm
+├── ivaictl/                  # Mac CLI client
+│   └── main.go
+internal/
+├── tools/                    # Low-level primitives: fs, network, shell
+├── memory/                   # SQLite with embeddings and task tracking
+├── sandbox/                  # Wazero WebAssembly runtime
+├── llm/                      # Multi-model LLM gateway (DeepSeek, Anthropic, Gemini)
+└── telemetry/               # OpenTelemetry setup
+```
+
 ## 1. Core Architecture (The Kernel)
 
 - **Runtime**: Pure Go (linux/arm64) binary running inside a minimal Debian OrbStack VM.
 - **Daemonization**: Managed by systemd (`ivai.service`). Runs automatically on boot, self-heals on crashes, and pipes structured JSON logs to the system journal via `journald`.
 - **Privilege Isolation**: Executes under a dedicated, restricted Linux system user (`ivai`) with zero password login or sudo privileges.
 - **Configuration**: Secrets loaded via `godotenv` from a locked-down file (`/etc/ivai/.env` with 600 permissions).
+- **Modular Code Structure**: The binary's source in `cmd/ivai/` is split across five files by responsibility — `main.go` (minimal startup + HTTP + CLI), `process.go` (task processing + reasoning loop), `tools.go` (tool definitions + dispatcher), `github_tools.go` (GitHub/Git/CodeScene executors), and `swarm.go` (VM worker lifecycle). Each file independently scores CodeHealth 10.0.
+- **Fault-Tolerant Initialization**: Every component (tracer, memory store, LLM gateway) initializes independently. Failures are logged as warnings and the system continues with degraded functionality rather than crashing. If the memory DB fails to mount, the kernel runs without persistence; if all API keys are missing, tasks return an error gracefully.
 
 ## 2. Cognitive Engine (The Brain)
 
@@ -106,11 +132,15 @@ Ivai OS has transitioned from a simple Go script to a daemonized, agentic operat
 
 ## 4. Execution Subsystems (The Hands)
 
-- **File I/O (`read_file`, `write_file`)**: Grants the agent ability to read host files and write raw code/configurations to disk.
-- **System Shell (`execute_command`)**: Utilizes `os/exec` wrapped in a `bash -c` subshell. Allows the agent to run native Linux utilities, compile code, and explore its host environment.
-- **Wasm Sandbox (`execute_wasm`)**: An embedded WebAssembly micro-VM using **Wazero**. Enables zero-trust execution of compiled `.wasm` binaries (WASI preview 1 standard) with strict millisecond timeouts and sandboxed standard I/O.
-- **Network Tooling (`http_request`)**: Performs HTTP requests (GET, POST, etc.) using Go's `net/http` client, allowing interaction with external APIs.
-- **Version Control (`git`)**: Pre-installed and configured `git` utility available via `execute_command` for autonomous repository management.
+17 tools are available to the reasoning loop, grouped into categories:
+
+- **File I/O** (`read_file`, `write_file`)**: Grants the agent ability to read host files and write raw code/configurations to disk.
+- **System Shell** (`execute_command`)**: Utilizes `os/exec` wrapped in a `bash -c` subshell. Allows the agent to run native Linux utilities, compile code, and explore its host environment.
+- **Wasm Sandbox** (`execute_wasm`)**: An embedded WebAssembly micro-VM using **Wazero**. Enables zero-trust execution of compiled `.wasm` binaries (WASI preview 1 standard) with strict millisecond timeouts and sandboxed standard I/O.
+- **Network Tooling** (`http_request`)**: Performs HTTP requests (GET, POST, etc.) using Go's `net/http` client, allowing interaction with external APIs.
+- **Version Control / GitHub** (`github_pr`, `create_issue`, `list_issues`, `update_wiki`)**: Autonomous repository management, issue tracking, and wiki editing via `gh` CLI.
+- **Code Health** (`code_health`)**: Integration with CodeScene CLI for delta analysis.
+- **Swarm Orchestration** (`swarm_clone`, `swarm_deploy`, `swarm_dispatch`, `swarm_gather`, `swarm_status`, `swarm_spawn`, `swarm_kill`)**: VM worker lifecycle management — clone VMs, deploy binaries, dispatch tasks, gather results, and kill workers.
 
 ## 5. Interfaces (The Ears)
 
@@ -129,12 +159,14 @@ Ivai OS has transitioned from a simple Go script to a daemonized, agentic operat
 ## 7. Web Dashboard (The Control Panel)
 
 - **Single-Page App**: Self-contained HTML/CSS/JS embedded via `//go:embed` in `cmd/ivai/dashboard.go`. Zero external dependencies.
-- **Four Tabs**:
+- **Six Tabs**:
   - **Dashboard** — runtime stats (uptime, Go version, goroutines, heap, OS/arch), LLM provider status (ready/no-key per provider), auto-refreshes every 30s.
   - **Task Console** — SSE stream viewer with real-time event rendering. Color-coded events (blue=start, purple=thinking, amber=tool_call, orange=tool_result, green=complete, red=error). Uses `fetch` + `ReadableStream` for SSE parsing.
+  - **Task Results** — paginated task history with expandable rows, success/fail rates, average duration bar chart.
   - **Memory** — paginated conversation history from SQLite (`GET /api/memory?limit=N&offset=M`). Color-coded role badges, content/reasoning columns, timestamps.
-  - **Tools** — lists all 5 tools with parameter names, types, and required status.
-- **API Endpoints Added**: `GET /api/status` (runtime info), `GET /api/memory` (paginated messages), `GET /api/tools` (tool listing).
+  - **Tools** — lists all 17 tools with parameter names, types, and required status.
+  - **System** — embeddings count, message count, task stats, and the full system prompt.
+- **API Endpoints**: `GET /api/status` (runtime info), `GET /api/memory` (paginated messages), `GET /api/tools` (tool listing), `GET /api/task-results` (task history), `GET /api/system` (system stats), `GET /api/embeddings` (vector store).
 
 ## 8. Self-Knowledge (The Identity)
 

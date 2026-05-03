@@ -12,6 +12,5 @@
 .DS_Store
 ivai-local
 memory.db
-cmd/ivai/f
-.crush
 ivaictl-linux
+coverage.out

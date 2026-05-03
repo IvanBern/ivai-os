@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -117,5 +118,116 @@ data: {"type":"task_complete","message":"Task completed","data":{"response":"don
 	err := readSSEStream(strings.NewReader(sseData))
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
+	}
+}
+
+func TestBuildAPIDefaultPort(t *testing.T) {
+	os.Unsetenv("IVAI_API_URL")
+	os.Unsetenv("IVAI_PORT")
+	url := buildAPIURL()
+	if url != "http://localhost:8080/api/task" {
+		t.Errorf("expected default URL, got %s", url)
+	}
+}
+
+func TestHandleResponse(t *testing.T) {
+	t.Run("status OK", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"response":"hello"}`))
+		}))
+		defer server.Close()
+		resp, _ := http.Get(server.URL)
+		err := handleResponse(resp)
+		if err != nil {
+			t.Errorf("expected nil, got %v", err)
+		}
+	})
+	t.Run("status Accepted", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		defer server.Close()
+		resp, _ := http.Get(server.URL)
+		err := handleResponse(resp)
+		if err != nil {
+			t.Errorf("expected nil, got %v", err)
+		}
+	})
+	t.Run("status error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		defer server.Close()
+		resp, _ := http.Get(server.URL)
+		err := handleResponse(resp)
+		if err == nil {
+			t.Error("expected error for bad status")
+		}
+	})
+}
+
+func TestPrintTaskError(t *testing.T) {
+	evt := progressEvent{Type: "task_error", Data: map[string]any{"error": "something failed"}}
+	printTaskError(evt)
+}
+
+func TestPrintTaskErrorNilData(t *testing.T) {
+	printTaskError(progressEvent{})
+}
+
+func TestPrintThinkingVariations(t *testing.T) {
+	t.Run("with reasoning and content", func(t *testing.T) {
+		printThinking(progressEvent{Data: map[string]any{"reasoning": "r", "content": "c"}})
+	})
+	t.Run("nil data", func(t *testing.T) {
+		printThinking(progressEvent{})
+	})
+	t.Run("empty fields", func(t *testing.T) {
+		printThinking(progressEvent{Data: map[string]any{"reasoning": "", "content": ""}})
+	})
+}
+
+func TestPrintToolCallNilData(t *testing.T) {
+	printToolCall(progressEvent{})
+}
+
+func TestPrintToolResultNilData(t *testing.T) {
+	printToolResult(progressEvent{})
+}
+
+func TestPrintTaskCompleteNilData(t *testing.T) {
+	printTaskComplete(progressEvent{})
+}
+
+func TestPrintSSEEventDefault(t *testing.T) {
+	printSSEEvent("unknown_type", `{"type":"unknown"}`)
+}
+
+func TestSendTaskError(t *testing.T) {
+	os.Setenv("IVAI_API_URL", "http://127.0.0.1:1")
+	defer os.Unsetenv("IVAI_API_URL")
+	err := sendTask("test")
+	if err == nil {
+		t.Error("expected error when no server running")
+	}
+}
+
+func TestStreamTaskError(t *testing.T) {
+	os.Setenv("IVAI_API_URL", "http://127.0.0.1:1")
+	defer os.Unsetenv("IVAI_API_URL")
+	err := streamTask("test")
+	if err == nil {
+		t.Error("expected error when no server running")
+	}
+}
+
+func TestReadSSEScannerError(t *testing.T) {
+	// A very long line (over default scanner buffer) should cause scanner error
+	longPrefix := strings.Repeat("a", bufio.MaxScanTokenSize)
+	sseData := "event: task_start\ndata: " + longPrefix + "\n\n"
+	err := readSSEStream(strings.NewReader(sseData))
+	if err == nil {
+		t.Error("expected scanner error for oversized line")
 	}
 }
