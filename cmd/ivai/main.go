@@ -24,6 +24,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/mattn/go-isatty"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -544,7 +545,10 @@ func runReasoningLoop(ctx context.Context, payload []llm.Message, s *taskState) 
 	tracer := otel.Tracer("ivai-os")
 	for {
 		ctx, span := tracer.Start(ctx, "reasoning-step",
-			trace.WithAttributes(),
+			trace.WithAttributes(
+				attribute.String("model", s.model),
+				attribute.Int("messages", len(payload)),
+			),
 		)
 		responseMsg, err := s.gateway.Chat(ctx, payload, s.tools, s.model)
 		if err != nil {
@@ -655,7 +659,12 @@ func resultOrError(result string, err error) string {
 
 func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.WasmRuntime) string {
 	tracer := otel.Tracer("ivai-os")
-	ctx, span := tracer.Start(ctx, "tool."+tc.Function.Name)
+	ctx, span := tracer.Start(ctx, "tool."+tc.Function.Name,
+		trace.WithAttributes(
+			attribute.String("tool.name", tc.Function.Name),
+			attribute.Int("tool.args_len", len(tc.Function.Arguments)),
+		),
+	)
 	defer span.End()
 
 	switch tc.Function.Name {
