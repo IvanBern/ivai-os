@@ -17,7 +17,7 @@ func TestGatewayDeepSeekTranslation(t *testing.T) {
 		if req.Model != "deepseek-v4-pro" {
 			t.Errorf("expected deepseek-v4-pro, got %s", req.Model)
 		}
-		
+
 		resp := OpenAIResponse{
 			Choices: []struct {
 				Message Message `json:"message"`
@@ -50,21 +50,21 @@ func TestGatewayAnthropicTranslation(t *testing.T) {
 		if req.Model != "claude-3-5-sonnet-20241022" {
 			t.Errorf("expected claude, got %s", req.Model)
 		}
-		
+
 		resp := AnthropicResponse{
 			Content: []AnthropicContent{{Type: "text", Text: "hi"}},
 		}
-		
+
 		// If it's a tool call request
 		for _, m := range req.Messages {
 			for _, c := range m.Content {
 				if strings.Contains(c.Text, "use tool") {
 					resp.Content = []AnthropicContent{
 						{
-							Type: "tool_use",
-							ID:   "call_1",
-							Name: "read_file",
-							Input: map[string]interface{}{"filepath": "test.txt"},
+							Type:  "tool_use",
+							ID:    "call_1",
+							Name:  "read_file",
+							Input: map[string]any{"filepath": "test.txt"},
 						},
 					}
 				}
@@ -131,7 +131,7 @@ func TestGatewayGeminiTranslation(t *testing.T) {
 				{
 					FunctionCall: &GeminiFunctionCall{
 						Name: "read_file",
-						Args: map[string]interface{}{"filepath": "test.txt"},
+						Args: map[string]any{"filepath": "test.txt"},
 					},
 				},
 			}
@@ -245,7 +245,7 @@ func TestGatewayErrorPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := tt.setup()
 			defer server.Close()
-			
+
 			// Override URLs
 			g.DeepSeekURL = server.URL
 			g.AnthropicURL = server.URL

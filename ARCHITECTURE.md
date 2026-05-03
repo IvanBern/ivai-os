@@ -30,9 +30,17 @@ Ivai OS has transitioned from a simple Go script to a daemonized, agentic operat
 
 ## 5. Interfaces (The Ears)
 
-- **HTTP Server**: A background goroutine listening on port 8080, accepting JSON payloads at `/api/task`.
-- **Mac Client (`ivaictl`)**: A native macOS Go binary that communicates with the kernel via the HTTP API, supporting command-line arguments and piped input.
-- **CLI REPL**: Standard input scanner for interactive terminal debugging (integrated into the kernel event loop).
+- **HTTP Server**: A background goroutine listening on port 8080, with two endpoints:
+  - `POST /api/task` — blocking task submission (JSON request → JSON response, 120s timeout).
+  - `POST /api/task/stream` — SSE (Server-Sent Events) streaming endpoint that emits real-time progress events (`task_start`, `thinking`, `tool_call`, `tool_result`, `task_complete`, `task_error`) as the reasoning loop executes.
+- **Mac Client (`ivaictl`)**: A native macOS Go binary that communicates with the kernel via the HTTP API. Supports `--stream` flag for live progress visualization.
+- **CLI REPL**: Standard input scanner for interactive terminal debugging (integrated into the kernel event loop). Prints `[Thinking]`, tool calls, and `[Ivai]` responses directly to stdout.
+
+## 6. Observability (The Eyes)
+
+- **SSE Progress Streaming**: Live event stream from `POST /api/task/stream` using `text/event-stream` content type. Events include model selection, reasoning steps, tool calls with arguments, tool results (truncated to 500 chars), and final responses. The `ivaictl --stream` flag parses and pretty-prints these events in real time.
+- **Structured Logging**: JSON-format `slog` output to stdout, piped to `journald` on production VMs. Key events: task routing, tool execution, task completion, LLM errors.
+- **OpenTelemetry Tracing**: Foundation initialized — spans created for reasoning steps and tool execution. Exporters (Jaeger/OTLP) pending in Phase 8.
 
 ---
 

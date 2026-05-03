@@ -28,8 +28,8 @@ func InitTracer(serviceName string) (*trace.TracerProvider, error) {
 		trace.WithResource(res),
 		trace.WithSampler(trace.AlwaysSample()),
 	)
-	
+
 	otel.SetTracerProvider(tp)
-	
+
 	return tp, nil
 }

@@ -75,8 +75,44 @@ Ivai > What files are in /tmp?
 
 ### HTTP API
 Send tasks programmatically to the background listener:
+
+**Blocking (wait for full response):**
 ```bash
 curl -X POST http://localhost:8080/api/task \
   -H "Content-Type: application/json" \
   -d '{"instruction": "List all active processes"}'
+```
+
+**Streaming SSE (real-time progress):**
+```bash
+curl -N -X POST http://localhost:8080/api/task/stream \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "@claude find all Go files and count lines"}'
+```
+
+### Mac Client (`ivaictl`)
+
+```bash
+# Blocking mode
+./ivaictl "@deepseek what is the current time?"
+
+# Streaming mode — see live progress as Ivai thinks and calls tools
+./ivaictl --stream "@claude refactor the auth module"
+
+# Pipe instructions
+echo "check disk usage" | ./ivaictl --stream
+```
+
+**Streaming output example:**
+```
+[model] claude-3-5-sonnet-20241022
+[instruction] find all Go files and count lines
+[thinking] I need to find Go files first, then count lines
+[tool] execute_command → find . -name '*.go' -type f
+[tool result] execute_command → ./main.go\n./gateway.go\n./db.go
+[thinking] Now I'll run wc -l on each file
+[tool] execute_command → wc -l ./main.go ./gateway.go ./db.go
+[tool result] execute_command → 463 ./main.go / 466 ./gateway.go / 97 ./db.go / 1026 total
+
+[complete] Found 3 Go files with 1,026 total lines of code.
 ```

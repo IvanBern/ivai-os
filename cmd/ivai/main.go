@@ -25,13 +25,21 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// ProgressEvent is emitted by the reasoning loop for SSE streaming.
+type ProgressEvent struct {
+	Type    string `json:"type"`    // task_start, thinking, tool_call, tool_result, task_complete, task_error
+	Message string `json:"message"` // Human-readable description
+	Data    any    `json:"data,omitempty"`
+}
+
 type TaskRequest struct {
 	Instruction string `json:"instruction"`
 }
 
 type taskWithResponder struct {
-	instruction string
-	responder   chan string
+	instruction  string
+	responder    chan string
+	progressChan chan<- ProgressEvent // optional SSE progress channel
 }
 
 func main() {
@@ -66,7 +74,7 @@ func main() {
 
 	gateway, dbStore, wasmEngine := initDependencies(dbPath)
 
-	slog.Info("Ivai OS is now running. Awaiting input via CLI or port 8080.")
+	slog.Info("Ivai OS is now running. Awaiting input via CLI or port " + port + ".")
 	runEventLoop(ctx, taskChan, server, gateway, dbStore, wasmEngine)
 }
 
@@ -118,59 +126,42 @@ func runEventLoop(ctx context.Context, taskChan <-chan taskWithResponder, server
 		case t := <-taskChan:
 			go func(task taskWithResponder) {
 				response := processTask(ctx, TaskInput{
-				Instruction: task.instruction,
-				Gateway:     gateway,
-				DBStore:     dbStore,
-				WasmEngine:  wasmEngine,
-			})
+					Instruction: task.instruction,
+					Gateway:     gateway,
+					DBStore:     dbStore,
+					WasmEngine:  wasmEngine,
+				}, task.progressChan)
 				if task.responder != nil {
 					task.responder <- response
 				}
 			}(t)
 
 		case <-ctx.Done():
-			slog.Info("Shutting down Ivai OS...")
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := server.Shutdown(shutdownCtx); err != nil {
-				slog.Error("HTTP server shutdown error", "err", err)
-			}
-			slog.Info("Ivai OS gracefully stopped.")
+			shutdownServer(server)
 			return
 		}
 	}
 }
 
+func shutdownServer(server *http.Server) {
+	slog.Info("Shutting down Ivai OS...")
+	if server != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.Error("HTTP server shutdown error", "err", err)
+		}
+	}
+	slog.Info("Ivai OS gracefully stopped.")
+}
+
 func startHTTPServer(port string, taskChan chan<- taskWithResponder) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/task", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req TaskRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON", http.StatusBadRequest)
-			return
-		}
-
-		respChan := make(chan string)
-		go func() {
-			taskChan <- taskWithResponder{
-				instruction: req.Instruction,
-				responder:   respChan,
-			}
-		}()
-
-		select {
-		case finalResponse := <-respChan:
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"response": finalResponse})
-		case <-time.After(120 * time.Second):
-			http.Error(w, "Task processing timed out", http.StatusGatewayTimeout)
-		case <-r.Context().Done():
-			return
-		}
+		handleTaskBlocking(w, r, taskChan)
+	})
+	mux.HandleFunc("/api/task/stream", func(w http.ResponseWriter, r *http.Request) {
+		handleTaskStreaming(w, r, taskChan)
 	})
 
 	server := &http.Server{
@@ -186,6 +177,104 @@ func startHTTPServer(port string, taskChan chan<- taskWithResponder) *http.Serve
 	}()
 
 	return server
+}
+
+func handleTaskBlocking(w http.ResponseWriter, r *http.Request, taskChan chan<- taskWithResponder) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req TaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	respChan := make(chan string)
+	taskChan <- taskWithResponder{
+		instruction: req.Instruction,
+		responder:   respChan,
+	}
+
+	select {
+	case finalResponse := <-respChan:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"response": finalResponse})
+	case <-time.After(120 * time.Second):
+		http.Error(w, "Task processing timed out", http.StatusGatewayTimeout)
+	case <-r.Context().Done():
+		return
+	}
+}
+
+func handleTaskStreaming(w http.ResponseWriter, r *http.Request, taskChan chan<- taskWithResponder) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req TaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	setSSEHeaders(w)
+
+	progressChan := make(chan ProgressEvent, 20)
+	respChan := make(chan string, 1)
+
+	taskChan <- taskWithResponder{
+		instruction:  req.Instruction,
+		responder:    respChan,
+		progressChan: progressChan,
+	}
+
+	streamProgressEvents(w, flusher, progressChan, respChan, r.Context())
+}
+
+func setSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+}
+
+func streamProgressEvents(w http.ResponseWriter, flusher http.Flusher, progressChan <-chan ProgressEvent, respChan <-chan string, ctx context.Context) {
+	for {
+		select {
+		case event, ok := <-progressChan:
+			if !ok {
+				finalResponse := <-respChan
+				writeSSEEvent(w, flusher, "task_complete", ProgressEvent{
+					Type: "task_complete", Message: "Task completed",
+					Data: map[string]string{"response": finalResponse},
+				})
+				return
+			}
+			writeSSEEvent(w, flusher, event.Type, event)
+
+		case <-time.After(120 * time.Second):
+			writeSSEEvent(w, flusher, "task_error", ProgressEvent{
+				Type: "task_error", Message: "Task timed out",
+				Data: map[string]string{"error": "timeout after 120s"},
+			})
+			return
+
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType string, event ProgressEvent) {
+	data, _ := json.Marshal(event)
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+	flusher.Flush()
 }
 
 func startCLI(taskChan chan<- taskWithResponder) {
@@ -218,29 +307,50 @@ type TaskInput struct {
 }
 
 type taskState struct {
-	gateway    *llm.Gateway
-	dbStore    *memory.Store
-	wasmEngine *sandbox.WasmRuntime
-	tools      []llm.Tool
-	model      string
+	gateway      *llm.Gateway
+	dbStore      *memory.Store
+	wasmEngine   *sandbox.WasmRuntime
+	tools        []llm.Tool
+	model        string
+	progressChan chan<- ProgressEvent
 }
 
-func processTask(ctx context.Context, in TaskInput) string {
+func (s *taskState) emit(evt ProgressEvent) {
+	if s.progressChan == nil {
+		return
+	}
+	select {
+	case s.progressChan <- evt:
+	default:
+	}
+}
+
+func processTask(ctx context.Context, in TaskInput, progressChan chan<- ProgressEvent) string {
 	model, instruction := extractModel(in.Instruction)
 	slog.Info("Task routing", "model", model, "instruction", instruction)
 
 	in.DBStore.SaveMessage("user", instruction, "")
 
 	state := &taskState{
-		gateway:    in.Gateway,
-		dbStore:    in.DBStore,
-		wasmEngine: in.WasmEngine,
-		tools:      buildTools(),
-		model:      model,
+		gateway:      in.Gateway,
+		dbStore:      in.DBStore,
+		wasmEngine:   in.WasmEngine,
+		tools:        buildTools(),
+		model:        model,
+		progressChan: progressChan,
 	}
 
-	payload := buildPayload(in.DBStore, instruction)
-	return runReasoningLoop(ctx, payload, state)
+	state.emit(ProgressEvent{Type: "task_start", Message: "Task started", Data: map[string]string{"model": model, "instruction": instruction}})
+
+	payload := buildPayload(in.DBStore)
+	result := runReasoningLoop(ctx, payload, state)
+
+	// Close progress channel when done (if it exists) to signal completion to SSE handler.
+	if progressChan != nil {
+		close(progressChan)
+	}
+
+	return result
 }
 
 func extractModel(t string) (model, instruction string) {
@@ -263,13 +373,13 @@ func extractModel(t string) (model, instruction string) {
 }
 
 func buildTools() []llm.Tool {
-	define := func(name, desc string, props map[string]interface{}, required []string) llm.Tool {
+	define := func(name, desc string, props map[string]any, required []string) llm.Tool {
 		return llm.Tool{
 			Type: "function",
 			Function: llm.FunctionDefinition{
 				Name:        name,
 				Description: desc,
-				Parameters: map[string]interface{}{
+				Parameters: map[string]any{
 					"type":       "object",
 					"properties": props,
 					"required":   required,
@@ -278,46 +388,46 @@ func buildTools() []llm.Tool {
 		}
 	}
 
-	strProp := func(desc string) map[string]interface{} {
-		return map[string]interface{}{"type": "string", "description": desc}
+	strProp := func(desc string) map[string]any {
+		return map[string]any{"type": "string", "description": desc}
 	}
 
 	return []llm.Tool{
 		define("read_file", "Reads the contents of a file at the given path on the local filesystem.",
-			map[string]interface{}{"filepath": map[string]interface{}{"type": "string"}},
+			map[string]any{"filepath": map[string]any{"type": "string"}},
 			[]string{"filepath"}),
 
 		define("write_file", "Writes text content to a file at the given path, overwriting it if it exists.",
-			map[string]interface{}{
-				"filepath": map[string]interface{}{"type": "string"},
-				"content":  map[string]interface{}{"type": "string"},
+			map[string]any{
+				"filepath": map[string]any{"type": "string"},
+				"content":  map[string]any{"type": "string"},
 			},
 			[]string{"filepath", "content"}),
 
 		define("execute_command", "Executes a bash shell command on the host Debian system and returns the output.",
-			map[string]interface{}{"command": map[string]interface{}{"type": "string"}},
+			map[string]any{"command": map[string]any{"type": "string"}},
 			[]string{"command"}),
 
 		define("execute_wasm", "Executes a compiled WebAssembly (.wasm) binary in a secure, isolated sandbox with strict timeouts. Passes data via stdin and returns stdout.",
-			map[string]interface{}{
+			map[string]any{
 				"filepath":   strProp("Absolute path to the .wasm file on disk"),
 				"payload":    strProp("Data to send to the Wasm module via standard input (stdin)"),
-				"timeout_ms": map[string]interface{}{"type": "integer", "description": "Execution timeout in milliseconds (e.g., 1000)"},
+				"timeout_ms": map[string]any{"type": "integer", "description": "Execution timeout in milliseconds (e.g., 1000)"},
 			},
 			[]string{"filepath", "payload", "timeout_ms"}),
 
 		define("http_request", "Performs an HTTP request (GET, POST, etc.) and returns the response body.",
-			map[string]interface{}{
+			map[string]any{
 				"method":  strProp("HTTP method (e.g., GET, POST)"),
 				"url":     strProp("Target URL"),
 				"body":    strProp("Request body (optional)"),
-				"headers": map[string]interface{}{"type": "object", "description": "HTTP headers (optional)"},
+				"headers": map[string]any{"type": "object", "description": "HTTP headers (optional)"},
 			},
 			[]string{"method", "url"}),
 	}
 }
 
-func buildPayload(dbStore *memory.Store, instruction string) []llm.Message {
+func buildPayload(dbStore *memory.Store) []llm.Message {
 	history, _ := dbStore.GetRecentMessages(10)
 	homeDir, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
@@ -348,29 +458,35 @@ func runReasoningLoop(ctx context.Context, payload []llm.Message, s *taskState) 
 		responseMsg, err := s.gateway.Chat(ctx, payload, s.tools, s.model)
 		if err != nil {
 			slog.Error("LLM Execution Failed", "error", err)
+			s.emit(ProgressEvent{Type: "task_error", Message: "LLM error", Data: map[string]string{"error": err.Error()}})
 			span.End()
 			printPrompt()
 			return "Error: " + err.Error()
 		}
 
-		if done, result := checkCompletion(responseMsg, s.dbStore); done {
+		if done, result := checkCompletion(responseMsg, s); done {
 			span.End()
 			return result
 		}
 
 		showThinking(responseMsg.ReasoningContent)
+		s.emit(ProgressEvent{
+			Type:    "thinking",
+			Message: "Model is thinking",
+			Data:    map[string]string{"reasoning": responseMsg.ReasoningContent, "content": responseMsg.Content},
+		})
 		payload = append(payload, responseMsg)
-		payload = appendToolResults(ctx, payload, responseMsg.ToolCalls, s.wasmEngine)
+		payload = appendToolResults(ctx, payload, responseMsg.ToolCalls, s)
 		span.End()
 	}
 }
 
-func checkCompletion(msg llm.Message, dbStore *memory.Store) (done bool, result string) {
+func checkCompletion(msg llm.Message, s *taskState) (done bool, result string) {
 	if len(msg.ToolCalls) > 0 {
 		return false, ""
 	}
 	slog.Info("Task completed", "response_length", len(msg.Content))
-	dbStore.SaveMessage("assistant", msg.Content, msg.ReasoningContent)
+	s.dbStore.SaveMessage("assistant", msg.Content, msg.ReasoningContent)
 	if isatty.IsTerminal(os.Stdout.Fd()) {
 		fmt.Printf("\n[Ivai] %s\n", msg.Content)
 	}
@@ -390,10 +506,20 @@ func showThinking(reasoningContent string) {
 	}
 }
 
-func appendToolResults(ctx context.Context, payload []llm.Message, toolCalls []llm.ToolCall, wasmEngine *sandbox.WasmRuntime) []llm.Message {
+func appendToolResults(ctx context.Context, payload []llm.Message, toolCalls []llm.ToolCall, s *taskState) []llm.Message {
 	for _, tc := range toolCalls {
 		slog.Info("Executing tool", "name", tc.Function.Name, "args", tc.Function.Arguments)
-		toolResult := executeToolCall(ctx, tc, wasmEngine)
+		s.emit(ProgressEvent{
+			Type:    "tool_call",
+			Message: fmt.Sprintf("Calling tool: %s", tc.Function.Name),
+			Data:    map[string]any{"name": tc.Function.Name, "args": tc.Function.Arguments},
+		})
+		toolResult := executeToolCall(ctx, tc, s.wasmEngine)
+		s.emit(ProgressEvent{
+			Type:    "tool_result",
+			Message: fmt.Sprintf("Tool result: %s", tc.Function.Name),
+			Data:    map[string]any{"name": tc.Function.Name, "result": truncate(toolResult, 500)},
+		})
 		payload = append(payload, llm.Message{
 			Role:       "tool",
 			Content:    toolResult,
@@ -401,6 +527,13 @@ func appendToolResults(ctx context.Context, payload []llm.Message, toolCalls []l
 		})
 	}
 	return payload
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func resultOrError(result string, err error) string {
@@ -417,7 +550,9 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 
 	switch tc.Function.Name {
 	case "read_file":
-		var args struct{ Filepath string `json:"filepath"` }
+		var args struct {
+			Filepath string `json:"filepath"`
+		}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		return resultOrError(tools.ReadFile(args.Filepath))
 
@@ -430,7 +565,9 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		return resultOrError("File written successfully.", tools.WriteFile(args.Filepath, args.Content))
 
 	case "execute_command":
-		var args struct{ Command string `json:"command"` }
+		var args struct {
+			Command string `json:"command"`
+		}
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		return resultOrError(tools.ExecuteCommand(args.Command))
 

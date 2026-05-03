@@ -9,7 +9,7 @@ TEST_RESULTS=test-results
 GOPATH=$(shell go env GOPATH)
 PATH:=$(GOPATH)/bin:$(PATH)
 
-.PHONY: tidy build build-cli deploy service run clean dev install-cli test test-reports deploy-secrets install-test-tools
+.PHONY: tidy build build-cli build-cli-linux deploy service run clean dev install-cli test test-reports deploy-secrets install-test-tools
 
 tidy:
 	go mod tidy
@@ -24,12 +24,17 @@ build-cli:
 	@echo "🍎 Building macOS CLI..."
 	go build -o $(CLI_NAME) $(CLI_PATH)
 
+# 1.6 Compile the CLI for Linux ARM64
+build-cli-linux:
+	@echo "🐧 Building Linux ARM64 CLI..."
+	GOOS=linux GOARCH=arm64 go build -o $(CLI_NAME)-linux $(CLI_PATH)
+
 install-cli: build-cli
 	@echo "🚚 Installing ivaictl to /usr/local/bin..."
 	sudo mv $(CLI_NAME) /usr/local/bin/$(CLI_NAME)
 	@echo "✅ ivaictl installed!"
 
-# 1.6 Testing
+# 1.7 Testing
 test:
 	@echo "🧪 Running all tests..."
 	go test -v ./...
@@ -68,11 +73,11 @@ test-reports:
 	@echo "✅ Reports generated in $(TEST_RESULTS)/"
 
 # 2. Build, push, and set permissions in one shot
-deploy: build
-	@echo "🚀 Shipping binary to Debian VM..."
-	scp $(BINARY_NAME) $(VM_TARGET):~/
-	@echo "🔒 Securing binary..."
-	ssh $(VM_TARGET) "sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo chown ivai:ivai $(BIN_DEST) && sudo chmod +x $(BIN_DEST)"
+deploy: build build-cli-linux
+	@echo "🚀 Shipping binaries to Debian VM..."
+	scp $(BINARY_NAME) $(CLI_NAME)-linux $(VM_TARGET):~/
+	@echo "🔒 Securing binaries..."
+	ssh $(VM_TARGET) "sudo mv ~/$(BINARY_NAME) $(BIN_DEST) && sudo mv ~/$(CLI_NAME)-linux /usr/local/bin/$(CLI_NAME) && sudo chown ivai:ivai $(BIN_DEST) /usr/local/bin/$(CLI_NAME) && sudo chmod +x $(BIN_DEST) /usr/local/bin/$(CLI_NAME)"
 	@echo "✅ Deployment complete!"
 
 # 2.1 Deploy environment secrets

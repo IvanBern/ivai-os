@@ -14,9 +14,9 @@ import (
 // --- Tool Calling Schemas (Shared) ---
 
 type FunctionDefinition struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 type Tool struct {
@@ -63,13 +63,13 @@ type OpenAIResponse struct {
 // --- Anthropic API Schemas ---
 
 type AnthropicContent struct {
-	Type      string                 `json:"type"`
-	Text      string                 `json:"text,omitempty"`
-	ID        string                 `json:"id,omitempty"`          // tool_use id
-	Name      string                 `json:"name,omitempty"`        // tool_use name
-	Input     map[string]interface{} `json:"input,omitempty"`       // tool_use input
-	ToolUseID string                 `json:"tool_use_id,omitempty"` // tool_result tool_use_id
-	Content   string                 `json:"content,omitempty"`     // tool_result content
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	ID        string         `json:"id,omitempty"`          // tool_use id
+	Name      string         `json:"name,omitempty"`        // tool_use name
+	Input     map[string]any `json:"input,omitempty"`       // tool_use input
+	ToolUseID string         `json:"tool_use_id,omitempty"` // tool_result tool_use_id
+	Content   string         `json:"content,omitempty"`     // tool_result content
 }
 
 type AnthropicMessage struct {
@@ -78,9 +78,9 @@ type AnthropicMessage struct {
 }
 
 type AnthropicTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
 }
 
 type AnthropicRequest struct {
@@ -98,13 +98,13 @@ type AnthropicResponse struct {
 // --- Gemini API Schemas ---
 
 type GeminiFunctionCall struct {
-	Name string                 `json:"name"`
-	Args map[string]interface{} `json:"args"`
+	Name string         `json:"name"`
+	Args map[string]any `json:"args"`
 }
 
 type GeminiFunctionResponse struct {
-	Name     string                 `json:"name"`
-	Response map[string]interface{} `json:"response"`
+	Name     string         `json:"name"`
+	Response map[string]any `json:"response"`
 }
 
 type GeminiPart struct {
@@ -173,10 +173,10 @@ func (g *Gateway) Chat(ctx context.Context, messages []Message, tools []Tool, mo
 
 type providerCall struct {
 	url      string
-	body     interface{}
+	body     any
 	headers  map[string]string
 	provider string
-	target   interface{}
+	target   any
 }
 
 // doProviderRequest marshals reqBody, POSTs to url with headers, checks status, and decodes into target.
@@ -238,10 +238,10 @@ func (g *Gateway) chatDeepSeek(ctx context.Context, messages []Message, tools []
 
 func translateToAnthropic(messages []Message) (systemPrompt string, result []AnthropicMessage) {
 	for _, m := range messages {
-		switch {
-		case m.Role == "system":
+		switch m.Role {
+		case "system":
 			systemPrompt = m.Content
-		case m.Role == "tool":
+		case "tool":
 			appendToolResultAnthropic(&result, m)
 		default:
 			result = append(result, anthropicFromMessage(m))
@@ -270,7 +270,7 @@ func anthropicFromMessage(m Message) AnthropicMessage {
 		am.Content = append(am.Content, AnthropicContent{Type: "text", Text: m.Content})
 	}
 	for _, tc := range m.ToolCalls {
-		var input map[string]interface{}
+		var input map[string]any
 		json.Unmarshal([]byte(tc.Function.Arguments), &input)
 		am.Content = append(am.Content, AnthropicContent{
 			Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: input,
@@ -294,9 +294,10 @@ func translateToolsToAnthropic(tools []Tool) []AnthropicTool {
 func parseAnthropicResponse(resp AnthropicResponse) Message {
 	resMsg := Message{Role: "assistant"}
 	for _, c := range resp.Content {
-		if c.Type == "text" {
+		switch c.Type {
+		case "text":
 			resMsg.Content += c.Text
-		} else if c.Type == "tool_use" {
+		case "tool_use":
 			args, _ := json.Marshal(c.Input)
 			resMsg.ToolCalls = append(resMsg.ToolCalls, ToolCall{
 				ID:   c.ID,
@@ -360,7 +361,7 @@ func geminiFromToolResult(m Message) GeminiContent {
 		Parts: []GeminiPart{{
 			FunctionResponse: &GeminiFunctionResponse{
 				Name:     m.Name,
-				Response: map[string]interface{}{"content": m.Content},
+				Response: map[string]any{"content": m.Content},
 			},
 		}},
 	}
@@ -369,7 +370,7 @@ func geminiFromToolResult(m Message) GeminiContent {
 func geminiFromToolCalls(m Message) []GeminiContent {
 	var out []GeminiContent
 	for _, tc := range m.ToolCalls {
-		var args map[string]interface{}
+		var args map[string]any
 		json.Unmarshal([]byte(tc.Function.Arguments), &args)
 		out = append(out, GeminiContent{
 			Role: "model",
