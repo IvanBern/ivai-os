@@ -811,80 +811,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		),
 	)
 	defer span.End()
-
-	switch tc.Function.Name {
-	case "read_file":
-		var args struct {
-			Filepath string `json:"filepath"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError(tools.ReadFile(args.Filepath))
-
-	case "write_file":
-		var args struct {
-			Filepath string `json:"filepath"`
-			Content  string `json:"content"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError("File written successfully.", tools.WriteFile(args.Filepath, args.Content))
-
-	case "execute_command":
-		var args struct {
-			Command string `json:"command"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError(tools.ExecuteCommand(args.Command))
-
-	case "execute_wasm":
-		var args struct {
-			Filepath  string `json:"filepath"`
-			Payload   string `json:"payload"`
-			TimeoutMs int    `json:"timeout_ms"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		wasmBytes, err := os.ReadFile(args.Filepath)
-		if err != nil {
-			return fmt.Sprintf("Error reading Wasm file: %v", err)
-		}
-		return resultOrError(wasmEngine.Execute(ctx, wasmBytes, args.Payload, args.TimeoutMs))
-
-	case "http_request":
-		var args struct {
-			Method  string            `json:"method"`
-			URL     string            `json:"url"`
-			Body    string            `json:"body"`
-			Headers map[string]string `json:"headers"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError(tools.HttpRequest(args.Method, args.URL, args.Body, args.Headers))
-
-	case "github_pr":
-		output, err := executeGitHubPR(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "code_health":
-		output, err := executeCodeHealthTool(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "create_issue":
-		output, err := executeCreateIssue(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "list_issues":
-		output, err := executeListIssues(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "update_wiki":
-		output, err := executeUpdateWiki(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	default:
-		if strings.HasPrefix(tc.Function.Name, "swarm_") {
-			output, err := dispatchSwarmTool(tc.Function.Name, tc.Function.Arguments)
-			return resultOrError(output, err)
-		}
-		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
+	if h, ok := toolRegistry[tc.Function.Name]; ok {
+		return resultOrError(h(ctx, tc.Function.Arguments, wasmEngine))
 	}
+	return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 }
 
 // --- Web Dashboard API Handlers ---
