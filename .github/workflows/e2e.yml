@@ -22,7 +22,7 @@ jobs:
 
       - name: Start Ivai
         run: |
-          mkdir -p /etc/ivai && IVAI_PORT=8099 ./ivai-os &
+          sudo mkdir -p /etc/ivai && IVAI_PORT=8099 ./ivai-os &
           sleep 3
           curl -s http://localhost:8099/api/status
 
