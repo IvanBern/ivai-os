@@ -5,10 +5,16 @@ on:
     types: [opened, edited, synchronize]
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Check PR description format
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,7 +32,6 @@ jobs:
             fi
           }
 
-          # Must be multi-line (not a one-liner)
           lines=$(echo "$PR_BODY" | wc -l)
           if [ "$lines" -lt 5 ]; then
             echo "❌ PR body is too short ($lines lines). Must use --body-file, not --body."
@@ -39,28 +44,19 @@ jobs:
           check_section "## Code Health"
           check_section "## Checklist"
 
-          # Test Results must contain actual output
           if ! echo "$PR_BODY" | grep -q "ok.*github.com/IvanBern/ivai-os"; then
             echo "⚠️  Test Results section may not contain actual test output"
           fi
 
-          # Code Health must contain actual cs delta output, not a template
           if echo "$PR_BODY" | grep -q "No issues found! (10.0)"; then
-            echo "⚠️  Code Health section looks like a template — make sure it's real cs delta output"
+            echo "⚠️  Code Health section looks like a template"
           fi
 
           if [ "$errors" -gt 0 ]; then
             echo ""
-            echo "PR description must follow the template:"
-            echo "  ## Summary"
-            echo "  ## Changes"
-            echo "  ## Test Results"
-            echo "  ## Code Health"
-            echo "  ## Checklist"
-            echo ""
+            echo "Required format: ## Summary, ## Changes, ## Test Results, ## Code Health, ## Checklist"
             echo "Use --body-file with gh pr create, never --body."
             exit 1
           fi
 
-          echo ""
           echo "✅ PR description format validated"
