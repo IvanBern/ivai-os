@@ -215,3 +215,118 @@ Live CI/CD status in the TUI:
 | Markdown | `glamour` | Renders markdown with syntax highlighting in terminal |
 | Forms | `huh?` | Interactive prompts (model selection, config) |
 | SSE client | Built-in | Bubble Tea commands for async I/O |
+
+### 5. Claude Code (Leaked Source) — Architectural Patterns
+
+**Source:** npm sourcemap leak (March 2026). 785KB `main.tsx` entry, 40+ tools, multi-agent swarm.
+
+| Pattern | Claude Code Implementation | Ivai Adoption |
+|---|---|---|
+| **Swarm Coordinator** | `src/coordinator/` — multi-agent orchestration with task delegation, result aggregation | Enhance T2 (Parallel Agents) with coordinator pattern |
+| **Dream System** | `src/services/autoDream/` — orient → gather → consolidate → prune cycle. Runs as background subagent. | T8: Memory consolidation cron (Phase 9 + MEMORY-MODEL.md) |
+| **KAIROS** | Always-on proactive assistant. Watches logs, acts without waiting. | T9: Proactive agent mode (Phase 9 event watchers) |
+| **ULTRAPLAN** | Offloads complex tasks to Opus 4.6 for 30-min deep planning sessions. | @research model flag already exists; add structured planning output |
+| **Ink/React Terminal** | React-based terminal renderer with components, state management, custom hooks | Complementary to T1 (Bubble Tea). Ink = JS, Bubble Tea = Go. Both Elm-like. |
+| **Undercover Mode** | Prevents AI from leaking internal codenames, hides AI identity on public repos | Security feature for Ivai when contributing to external repos |
+| **BUDDY System** | Tamagotchi companion with 18 species, deterministic PRNG, stats (DEBUGGING, CHAOS, SNARK) | UX polish: Ivai personality with stats, evolution based on task history |
+| **MCP Server** | Built-in MCP server for code exploration via `claude-code-explorer-mcp` | Ivai could expose its own tools as an MCP server for other agents |
+
+---
+
+## New Ideation Items (from Claude Code Research)
+
+### 🌙 T8: Dream-Based Memory Consolidation
+
+**Inspiration:** Claude Code's `autoDream` service
+
+```
+Every N hours (configurable cron):
+  ┌─ Orient ──── read MEMORY.md, embeddings, task_results
+  ├─ Gather ──── find new patterns, recurring errors, unused code
+  ├─ Consolidate ─ write to .crush/memory/YYYY-MM-DD-dream.md
+  └─ Prune ───── remove stale embeddings, archive old tasks
+```
+
+**Implementation:**
+- Agentic cron job (Phase 9.1) triggered by systemd timer
+- Uses RAG to find semantic patterns across task history
+- Writes dream journal to `.crush/memory/dreams/`
+- Prunes embeddings older than 90 days with similarity < 0.5
+
+### 👁️ T9: KAIROS-Style Proactive Agent
+
+**Inspiration:** Claude Code's KAIROS
+
+```yaml
+# .ivai/kairos.yaml
+watchers:
+  - type: github_webhook
+    events: [pull_request, issues]
+    action: "Review new activity and suggest responses"
+  - type: journald
+    filter: "level=ERROR"
+    action: "Alert operator with summary of errors"
+  - type: cron
+    schedule: "0 9 * * *"
+    action: "Summarize yesterday's activity and suggest today's priorities"
+```
+
+**Features:**
+- Watches external events (GitHub webhooks, journald, file changes)
+- Proactively creates issues or sends notifications
+- Operator can snooze, approve, or redirect
+- Builds on Phase 9 (event-driven OS) + Phase 10 (HITL)
+
+### 🎭 T10: Ivai Personality & Evolution
+
+**Inspiration:** Claude Code's BUDDY system
+
+```
+Every 100 completed tasks, Ivai "evolves":
+  ┌─ Stats ──── DEBUGGING: 78%, CHAOS: 12%, SNARK: 5%, SPEED: 85%
+  ├─ Species ── Based on dominant stats (e.g., "Debugger Crab")
+  └─ Soul ───── Auto-generated personality description from stats
+```
+
+**Implementation:**
+- Deterministic stats from task_results (success rate, avg duration, tool diversity)
+- Species name changes every 100 tasks
+- Displayed in TUI header and web dashboard
+- Pure fun/engagement feature — no functional impact
+
+### 🔗 T11: Ivai as MCP Server
+
+**Inspiration:** Claude Code's `claude-code-explorer-mcp`
+
+Expose Ivai's capabilities as an MCP server so other agents (Crush, Claude, Cursor) can use Ivai's tools:
+
+```json
+{
+  "mcpServers": {
+    "ivai": {
+      "command": "ivaictl mcp serve",
+      "tools": ["code_health", "execute_command", "read_file", "task_results"]
+    }
+  }
+}
+```
+
+**Features:**
+- Crush could call `code_health` through Ivai's MCP server
+- Claude Code could use Ivai's wasm sandbox
+- Any MCP-compatible agent gets access to Ivai's specialized tools
+- Ivy becomes a tool provider, not just a tool consumer
+
+---
+
+## Updated Implementation Phasing
+
+| Phase | Items | Effort | Dependencies |
+|---|---|---|---|
+| **Alpha** | T1 (TUI core), T5 (Workflows) | 3w | Bubble Tea dep |
+| **Alpha** | T11 (MCP server) | 1w | MCP protocol |
+| **Beta** | T2 (Parallel agents + Swarm), T8 (Dreams) | 4w | Phase 7.3, Phase 9 |
+| **Beta** | T3 (Conversation browser), T4 (Rich rendering) | 2w | T1 |
+| **Gamma** | T9 (KAIROS proactive) | 2w | Phase 9, Phase 10 |
+| **Gamma** | T6 (Session continuity), T7 (Pipeline dashboard) | 2w | T1, CI |
+| **Polish** | T10 (Personality & evolution) | 1w | Stats system |
