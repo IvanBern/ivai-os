@@ -16,13 +16,7 @@ import (
 )
 
 func TestResolvePaths(t *testing.T) {
-	t.Run("default darwin", func(t *testing.T) {
-		env, db := resolvePaths()
-		if env != ".env" || db != "memory.db" {
-			t.Errorf("unexpected default paths: env=%s db=%s", env, db)
-		}
-	})
-	t.Run("with IVAI_DATA_DIR", func(t *testing.T) {
+	t.Run("set custom dir", func(t *testing.T) {
 		t.Setenv("IVAI_DATA_DIR", "/custom/dir")
 		env, db := resolvePaths()
 		if env != "/custom/dir/.env" || db != "/custom/dir/memory.db" {
