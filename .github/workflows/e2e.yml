@@ -1,0 +1,86 @@
+name: E2E
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build Ivai
+        run: go build -o ivai-os ./cmd/ivai/
+
+      - name: Start Ivai
+        run: |
+          IVAI_PORT=8099 ./ivai-os &
+          sleep 3
+          curl -s http://localhost:8099/api/status
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Playwright
+        run: |
+          npm init -y --silent
+          npm install playwright --silent
+          npx playwright install chromium --with-deps
+
+      - name: E2E Dashboard Test
+        run: |
+          node -e "
+          const { chromium } = require('playwright');
+          (async () => {
+            const page = await (await chromium.launch()).newPage();
+            page.on('pageerror', e => { console.error('JS ERROR:', e.message); process.exit(1); });
+            await page.setViewportSize({ width: 1440, height: 900 });
+            await page.goto('http://localhost:8099', { waitUntil: 'networkidle', timeout: 10000 });
+            await page.waitForTimeout(2000);
+
+            for (const tab of ['dashboard','console','results','memory','tools','system'])
+              await page.locator('nav button[data-tab=\"'+tab+'\"]').waitFor({state:'visible',timeout:3000});
+            console.log('✅ 6 tabs');
+
+            await page.locator('nav button[data-tab=\"tools\"]').click();
+            await page.waitForTimeout(2000);
+            const tools = await page.locator('#tools-list .tool-card').count();
+            if (tools < 7) throw new Error('Expected >=7 tools, got '+tools);
+            console.log('✅ '+tools+' tools');
+
+            await page.locator('nav button[data-tab=\"console\"]').click();
+            await page.locator('#instruction').fill('say hello in one word');
+            await page.locator('#send-btn').click();
+            await page.waitForTimeout(8000);
+
+            await page.locator('nav button[data-tab=\"results\"]').click();
+            await page.waitForTimeout(2000);
+            const rows = await page.locator('#results-body tr').count();
+            if (rows < 1) throw new Error('Task not tracked');
+            console.log('✅ Task tracked: '+rows+' rows');
+
+            const exp = page.locator('#results-body tr.expand-row').first();
+            if (await exp.count() > 0) {
+              await exp.click(); await page.waitForTimeout(500);
+              if (!await page.locator('#results-body tr.expand-detail').first().isVisible())
+                throw new Error('Row expand failed');
+              console.log('✅ Row expand');
+            }
+
+            await page.screenshot({ path: 'e2e-screenshot.png' });
+            console.log('🎉 All E2E passed');
+            process.exit(0);
+          })();
+          "
+
+      - name: Upload screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshot
+          path: e2e-screenshot.png

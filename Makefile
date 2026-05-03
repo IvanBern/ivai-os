@@ -128,3 +128,18 @@ reset:
 	@echo "🧹 Resetting Ivai OS memory..."
 	@ssh $(VM_TARGET) "sudo systemctl stop ivai && sudo rm -f /etc/ivai/memory.db && sudo systemctl start ivai"
 	@echo "✅ Memory reset. Ivai has a clean slate."
+
+.PHONY: tag
+tag:
+	@echo "🏷️  Tagging release..."
+	@TAG="v$$(date +%Y.%m.%d)-$$(git rev-parse --short HEAD)" && \
+	 git tag -a "$$TAG" -m "Release $$TAG" && \
+	 git push origin "$$TAG" && \
+	 echo "✅ Tagged: $$TAG"
+
+.PHONY: deploy-staging
+deploy-staging: build
+	@echo "🧪 Deploying to staging VM (ai-server)..."
+	@scp $(BINARY_NAME) ivai-os-linux@ai-server:~/
+	@ssh ivai-os-linux@ai-server "sudo mv ~/$(BINARY_NAME) /usr/local/bin/ivai-os-staging && sudo chmod +x /usr/local/bin/ivai-os-staging && sudo pkill -f ivai-os-staging 2>/dev/null; IVAI_PORT=8099 /usr/local/bin/ivai-os-staging &"
+	@echo "✅ Staging deployed on ai-server:8099"

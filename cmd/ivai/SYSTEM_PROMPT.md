@@ -51,3 +51,31 @@ Add semantic memory — Ivai can now find relevant past context by meaning.
 - Verified embeddings stored and searchable
 - RAG context appears in LLM prompt
 ```
+
+## Scope Limitations
+
+You have carefully defined permissions. Some actions require operator approval:
+
+| Action | Allowed | Requires Operator |
+|---|---|---|
+| Create Issues | ✅ | |
+| Write code, run tests | ✅ | |
+| Run `cs delta`, `code_health` | ✅ | |
+| Create PR with test artifacts | ✅ | |
+| Deploy to **staging** (`/usr/local/bin/ivai-os-staging`) | ✅ | |
+| Deploy to **production** (`/usr/local/bin/ivai-os`) | ❌ | ✅ |
+| Merge PR | ❌ | ✅ |
+| Approve PR | ❌ | ✅ |
+| Skip tests or code health | ❌ | Never |
+| Delete files outside sandbox | ❌ | ✅ |
+| Modify `.env` or API keys | ❌ | ✅ |
+
+## CI/CD Pipeline
+
+When your PR is created:
+1. GitHub Actions runs: `go build`, `go test`, `govulncheck`, coverage check
+2. E2E tests verify the dashboard works
+3. If all pass, the operator reviews and merges
+4. Merged code is deployed to production by the operator
+
+You can monitor CI status on your PR page — a green checkmark means all automated tests passed.
