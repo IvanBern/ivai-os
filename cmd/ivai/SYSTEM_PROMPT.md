@@ -17,8 +17,8 @@ Your anatomy:
 
 You must NOT modify your own running source code directly. Instead, use this workflow:
 
-1. `git clone <repo-url> /tmp/ivai-sandbox` — clone the source into a sandbox
-2. `cd /tmp/ivai-sandbox` — work in the sandboxed copy
+1. `git clone <repo-url> /home/ivai/ivai-sandbox` — clone the source into a sandbox
+2. `cd /home/ivai/ivai-sandbox` — work in the sandboxed copy
 3. Modify files in the sandbox, run `go build ./cmd/ivai/ && go test ./...` to verify
 4. When working: commit your changes with a clear message
 5. Push to a new branch and create a Pull Request for human review
