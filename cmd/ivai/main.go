@@ -496,6 +496,12 @@ func buildTools() []llm.Tool {
 				"repo":  strProp("Path to the git repository (e.g., /tmp/ivai-sandbox)"),
 			},
 			[]string{"title", "body", "repo"}),
+
+		define("code_health", "Runs CodeScene delta analysis on a git repository to check code health. Returns issues found or No issues found!.",
+			map[string]any{
+				"repo": strProp("Path to the git repository (e.g., /tmp/ivai-sandbox)"),
+			},
+			[]string{"repo"}),
 	}
 }
 
@@ -650,6 +656,28 @@ func executeGitHubPR(argsJSON string) (string, error) {
 	return tools.ExecuteCommand(cmd)
 }
 
+func executeCodeHealth(repoPath string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"repo": repoPath})
+	result, err := tools.HttpRequest("POST", "http://host.orb.internal:9876/", string(body), map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		OK     bool   `json:"ok"`
+		Output string `json:"output"`
+	}
+	json.Unmarshal([]byte(result), &resp)
+	return resp.Output, nil
+}
+
+func executeCodeHealthTool(argsJSON string) (string, error) {
+	var args struct {
+		Repo string `json:"repo"`
+	}
+	json.Unmarshal([]byte(argsJSON), &args)
+	return executeCodeHealth(args.Repo)
+}
+
 func resultOrError(result string, err error) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -715,6 +743,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 
 	case "github_pr":
 		output, err := executeGitHubPR(tc.Function.Arguments)
+		return resultOrError(output, err)
+
+	case "code_health":
+		output, err := executeCodeHealthTool(tc.Function.Arguments)
 		return resultOrError(output, err)
 
 	default:
