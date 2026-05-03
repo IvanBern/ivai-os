@@ -972,3 +972,6 @@ func shellQuote(s string) string {
 	q := fmt.Sprintf("%q", s)
 	return q
 }
+func featureEnabled(name string) bool {
+	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
+}
