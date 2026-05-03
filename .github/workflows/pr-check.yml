@@ -1,0 +1,62 @@
+name: PR Description Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check PR description format
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body --jq .body)
+
+          errors=0
+
+          check_section() {
+            if ! echo "$PR_BODY" | grep -q "$1"; then
+              echo "❌ Missing section: $1"
+              errors=$((errors + 1))
+            else
+              echo "✅ Section found: $1"
+            fi
+          }
+
+          lines=$(echo "$PR_BODY" | wc -l)
+          if [ "$lines" -lt 5 ]; then
+            echo "❌ PR body is too short ($lines lines). Must use --body-file, not --body."
+            errors=$((errors + 1))
+          fi
+
+          check_section "## Summary"
+          check_section "## Changes"
+          check_section "## Test Results"
+          check_section "## Code Health"
+          check_section "## Checklist"
+
+          if ! echo "$PR_BODY" | grep -q "ok.*github.com/IvanBern/ivai-os"; then
+            echo "⚠️  Test Results section may not contain actual test output"
+          fi
+
+          if echo "$PR_BODY" | grep -q "No issues found! (10.0)"; then
+            echo "⚠️  Code Health section looks like a template"
+          fi
+
+          if [ "$errors" -gt 0 ]; then
+            echo ""
+            echo "Required format: ## Summary, ## Changes, ## Test Results, ## Code Health, ## Checklist"
+            echo "Use --body-file with gh pr create, never --body."
+            exit 1
+          fi
+
+          echo "✅ PR description format validated"
