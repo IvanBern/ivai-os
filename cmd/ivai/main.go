@@ -534,6 +534,36 @@ func buildTools() []llm.Tool {
 				"content": strProp("Markdown content for the page"),
 			},
 			[]string{"page", "content"}),
+		define("swarm_clone", "Clones the ivai-os-linux VM to create a new worker VM. Provide a name for the new worker.",
+			map[string]any{
+				"name": strProp("Name for the new worker VM (e.g., ivai-worker-1)"),
+			},
+			[]string{"name"}),
+
+		define("swarm_deploy", "Deploys the latest Ivai binary to a worker VM and starts the service.",
+			map[string]any{
+				"name": strProp("Worker VM name"),
+			},
+			[]string{"name"}),
+
+		define("swarm_dispatch", "Sends a task to a worker VM for execution.",
+			map[string]any{
+				"worker":      strProp("Worker VM hostname or IP (e.g., 192.168.139.x)"),
+				"instruction": strProp("Task instruction to execute"),
+			},
+			[]string{"worker", "instruction"}),
+
+		define("swarm_gather", "Collects task results from a worker VM.",
+			map[string]any{
+				"worker": strProp("Worker VM hostname or IP"),
+			},
+			[]string{"worker"}),
+
+		define("swarm_status", "Checks status of a worker VM or lists all VMs if no name provided.",
+			map[string]any{
+				"name": strProp("Optional VM name. Leave empty to list all VMs."),
+			},
+			[]string{}),
 	}
 }
 
@@ -748,6 +778,23 @@ func executeListIssues(argsJSON string) (string, error) {
 	return tools.ExecuteCommand(cmd)
 }
 
+func dispatchSwarmTool(name, argsJSON string) (string, error) {
+	switch name {
+	case "swarm_clone":
+		return executeSwarmClone(argsJSON)
+	case "swarm_deploy":
+		return executeSwarmDeploy(argsJSON)
+	case "swarm_dispatch":
+		return executeSwarmDispatch(argsJSON)
+	case "swarm_gather":
+		return executeSwarmGather(argsJSON)
+	case "swarm_status":
+		return executeSwarmStatus(argsJSON)
+	default:
+		return fmt.Sprintf("Unknown swarm tool: %s", name), nil
+	}
+}
+
 func resultOrError(result string, err error) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -764,76 +811,10 @@ func executeToolCall(ctx context.Context, tc llm.ToolCall, wasmEngine *sandbox.W
 		),
 	)
 	defer span.End()
-
-	switch tc.Function.Name {
-	case "read_file":
-		var args struct {
-			Filepath string `json:"filepath"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError(tools.ReadFile(args.Filepath))
-
-	case "write_file":
-		var args struct {
-			Filepath string `json:"filepath"`
-			Content  string `json:"content"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError("File written successfully.", tools.WriteFile(args.Filepath, args.Content))
-
-	case "execute_command":
-		var args struct {
-			Command string `json:"command"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError(tools.ExecuteCommand(args.Command))
-
-	case "execute_wasm":
-		var args struct {
-			Filepath  string `json:"filepath"`
-			Payload   string `json:"payload"`
-			TimeoutMs int    `json:"timeout_ms"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		wasmBytes, err := os.ReadFile(args.Filepath)
-		if err != nil {
-			return fmt.Sprintf("Error reading Wasm file: %v", err)
-		}
-		return resultOrError(wasmEngine.Execute(ctx, wasmBytes, args.Payload, args.TimeoutMs))
-
-	case "http_request":
-		var args struct {
-			Method  string            `json:"method"`
-			URL     string            `json:"url"`
-			Body    string            `json:"body"`
-			Headers map[string]string `json:"headers"`
-		}
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
-		return resultOrError(tools.HttpRequest(args.Method, args.URL, args.Body, args.Headers))
-
-	case "github_pr":
-		output, err := executeGitHubPR(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "code_health":
-		output, err := executeCodeHealthTool(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "create_issue":
-		output, err := executeCreateIssue(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "list_issues":
-		output, err := executeListIssues(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	case "update_wiki":
-		output, err := executeUpdateWiki(tc.Function.Arguments)
-		return resultOrError(output, err)
-
-	default:
-		return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
+	if h, ok := toolRegistry[tc.Function.Name]; ok {
+		return resultOrError(h(ctx, tc.Function.Arguments, wasmEngine))
 	}
+	return fmt.Sprintf("Unknown tool: %s", tc.Function.Name)
 }
 
 // --- Web Dashboard API Handlers ---
@@ -974,4 +955,46 @@ func shellQuote(s string) string {
 }
 func featureEnabled(name string) bool {
 	return os.Getenv("IVAI_FEATURE_"+strings.ToUpper(name)) != "false"
+}
+
+// --- Swarm Tools ---
+
+func callVMBridge(endpoint string, body map[string]string) (string, error) {
+	jsonBody, _ := json.Marshal(body)
+	return tools.HttpRequest("POST", "http://host.orb.internal:9877"+endpoint, string(jsonBody), map[string]string{"Content-Type": "application/json"})
+}
+
+func executeSwarmClone(argsJSON string) (string, error) {
+	var a struct{ Name string `json:"name"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return callVMBridge("/vm/clone", map[string]string{"name": a.Name})
+}
+
+func executeSwarmDeploy(argsJSON string) (string, error) {
+	var a struct{ Name string `json:"name"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return callVMBridge("/vm/deploy", map[string]string{"name": a.Name})
+}
+
+func executeSwarmDispatch(argsJSON string) (string, error) {
+	var a struct{ Worker, Task string `json:"worker,instruction"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return tools.HttpRequest("POST", "http://"+a.Worker+":8080/api/task", 
+		fmt.Sprintf(`{"instruction":%q}`, a.Task),
+		map[string]string{"Content-Type": "application/json"})
+}
+
+func executeSwarmGather(argsJSON string) (string, error) {
+	var a struct{ Worker string `json:"worker"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	return tools.HttpRequest("GET", "http://"+a.Worker+":8080/api/task-results?limit=5", "", nil)
+}
+
+func executeSwarmStatus(argsJSON string) (string, error) {
+	var a struct{ Name string `json:"name"` }
+	json.Unmarshal([]byte(argsJSON), &a)
+	if a.Name != "" {
+		return callVMBridge("/vm/status", map[string]string{"name": a.Name})
+	}
+	return callVMBridge("/vm/list", nil)
 }
