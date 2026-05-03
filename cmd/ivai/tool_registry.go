@@ -28,6 +28,8 @@ var toolRegistry = map[string]toolHandler{
 	"swarm_dispatch":  func(_ context.Context, a string, _ *sandbox.WasmRuntime) (string, error) { return executeSwarmDispatch(a) },
 	"swarm_gather":    func(_ context.Context, a string, _ *sandbox.WasmRuntime) (string, error) { return executeSwarmGather(a) },
 	"swarm_status":    func(_ context.Context, a string, _ *sandbox.WasmRuntime) (string, error) { return executeSwarmStatus(a) },
+	"swarm_spawn":     func(_ context.Context, a string, _ *sandbox.WasmRuntime) (string, error) { return executeSwarmSpawn(a) },
+	"swarm_kill":      func(_ context.Context, a string, _ *sandbox.WasmRuntime) (string, error) { return executeSwarmKill(a) },
 }
 
 func handleReadFile(_ context.Context, args string, _ *sandbox.WasmRuntime) (string, error) {
