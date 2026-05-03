@@ -48,7 +48,7 @@ jobs:
             echo "⚠️  Test Results section may not contain actual test output"
           fi
 
-          if echo "$PR_BODY" | grep -q "No issues found! (10.0)"; then
+          if echo "$PR_BODY" | grep -q "CodeScene delta: No issues found! (10.0)" && ! echo "$PR_BODY" | grep -q "Complex Method|Bumpy Road|Large Method|Code Duplication|Deep.*Complexity|Primitive Obsession|Excess Number|String Heavy"; then
             echo "⚠️  Code Health section looks like a template"
           fi
 
