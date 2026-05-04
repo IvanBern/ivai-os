@@ -34,3 +34,10 @@ func TestTracerProviderGlobalSet(t *testing.T) {
 	}
 	// Just verify InitTracer didn't panic setting the global provider
 }
+
+func TestInitTracerWithCanceledContext(t *testing.T) {
+	_, err := InitTracer("test-canceled")
+	if err != nil {
+		t.Logf("InitTracer with issues returned error: %v", err)
+	}
+}

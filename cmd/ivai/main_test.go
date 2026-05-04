@@ -994,3 +994,58 @@ func TestHandleEmbeddingsNilDB(t *testing.T) {
 		t.Error("expected error for nil dbStore")
 	}
 }
+
+func TestHandleMemoryNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/memory", nil)
+	rec := httptest.NewRecorder()
+	handleMemory(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Error("expected error for nil dbStore")
+	}
+}
+
+func TestHandleSystemNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/system", nil)
+	rec := httptest.NewRecorder()
+	handleSystem(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if _, ok := resp["embeddings_count"]; !ok {
+		t.Error("expected embeddings_count in response")
+	}
+}
+
+func TestHandleTaskBlockingInvalidJSON(t *testing.T) {
+	req := httptest.NewRequest("POST", "/api/task", strings.NewReader(`not json`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handleTaskBlocking(rec, req, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestShowThinkingNonTTY(t *testing.T) {
+	showThinking("")
+	showThinking("test reasoning")
+}
+
+func TestExecuteSwarmSpawnMissingBinary(t *testing.T) {
+	name := "testspawnfail"
+	os.RemoveAll("/tmp/ivai-" + name)
+	defer os.RemoveAll("/tmp/ivai-" + name)
+	result, err := executeSwarmSpawn(`{"name":"testspawnfail","port":"9099"}`)
+	if err != nil {
+		t.Logf("executeSwarmSpawn error: %v", err)
+	} else {
+		t.Logf("executeSwarmSpawn result: %s", result)
+	}
+}
