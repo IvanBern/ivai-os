@@ -1088,3 +1088,34 @@ func TestHandleWasmMissingFile(t *testing.T) {
 	}
 }
 
+func TestExecuteSwarmSpawnMkdirError(t *testing.T) {
+	// Make /tmp/ivai-testmkdira a file so MkdirAll fails
+	os.RemoveAll("/tmp/ivai-testmkdira")
+	os.WriteFile("/tmp/ivai-testmkdira", []byte("not a dir"), 0644)
+	defer os.RemoveAll("/tmp/ivai-testmkdira")
+
+	result, err := executeSwarmSpawn(`{"name":"testmkdira","port":"9098"}`)
+	if err == nil {
+		t.Error("expected error for mkdir failure")
+	} else {
+		t.Logf("executeSwarmSpawn mkdir error: %v", err)
+	}
+	_ = result
+}
+
+func TestExecuteSwarmSpawnEnvWriteError(t *testing.T) {
+	// Create a dir and make .env a pre-existing dir so WriteFile fails
+	os.RemoveAll("/tmp/ivai-testenvfail")
+	os.MkdirAll("/tmp/ivai-testenvfail", 0700)
+	os.MkdirAll("/tmp/ivai-testenvfail/.env", 0700)
+	defer os.RemoveAll("/tmp/ivai-testenvfail")
+
+	result, err := executeSwarmSpawn(`{"name":"testenvfail","port":"9097"}`)
+	if err == nil {
+		t.Error("expected error for .env write failure")
+	} else {
+		t.Logf("executeSwarmSpawn env write error: %v", err)
+	}
+	_ = result
+}
+
