@@ -1,0 +1,12 @@
+{
+  "name": "ivai-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test-swarm": "node swarm-dashboard.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.59.1"
+  }
+}

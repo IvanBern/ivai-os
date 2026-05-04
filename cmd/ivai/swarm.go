@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/IvanBern/ivai-os/internal/tools"
@@ -63,8 +65,9 @@ func executeSwarmSpawn(argsJSON string) (string, error) {
 	}
 	dataDir := "/tmp/ivai-" + a.Name
 
-	// Write filtered .env with API keys from parent process (0600 to avoid secret leaks)
+	// Write .env with IVAI_PORT + API keys from parent process (0600 to avoid secret leaks)
 	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("IVAI_PORT=%s\n", a.Port))
 	for _, key := range []string{"DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"} {
 		if val := os.Getenv(key); val != "" {
 			sb.WriteString(fmt.Sprintf("%s=%s\n", key, val))
@@ -181,4 +184,100 @@ func listLocalWorkers() string {
 		results = append(results, fmt.Sprintf(`{"name":%q,"type":"local","port":%q,"status":%s}`, name, localWorkerPort(name), status))
 	}
 	return "[" + strings.Join(results, ",") + "]"
+}
+
+// logFileInfo returns the size and last modified time of a worker's log file.
+func logFileInfo(name string) (size int64, modTime string) {
+	fi, err := os.Stat("/tmp/ivai-" + name + ".log")
+	if err != nil {
+		return 0, ""
+	}
+	return fi.Size(), fi.ModTime().Format("2006-01-02T15:04:05Z07:00")
+}
+
+// readWorkerLog returns the last N lines from a worker's log file.
+func readWorkerLog(name string, lines int) string {
+	f, err := os.Open("/tmp/ivai-" + name + ".log")
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var allLines []string
+	for scanner.Scan() {
+		allLines = append(allLines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Sprintf("Error reading log: %v", err)
+	}
+
+	if lines <= 0 || lines >= len(allLines) {
+		return strings.Join(allLines, "\n")
+	}
+	return strings.Join(allLines[len(allLines)-lines:], "\n")
+}
+
+// listWorkersWithMeta returns a JSON array of local workers with log metadata.
+func listWorkersWithMeta() string {
+	entries, err := os.ReadDir("/tmp")
+	if err != nil {
+		return "[]"
+	}
+
+	type workerInfo struct {
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		Port      string `json:"port"`
+		Status    any    `json:"status"`
+		LogSize   int64  `json:"log_size"`
+		LogMod    string `json:"log_modified"`
+		UptimeSec int    `json:"uptime_sec"`
+	}
+
+	results := make([]workerInfo, 0)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "ivai-") {
+			continue
+		}
+		name := strings.TrimPrefix(e.Name(), "ivai-")
+		port := localWorkerPort(name)
+		statusRaw := checkLocalWorker(name)
+		if statusRaw == "" {
+			continue
+		}
+
+		uptime := 0
+		var statusData map[string]any
+		if json.Unmarshal([]byte(statusRaw), &statusData) == nil {
+			if u, ok := statusData["uptime_sec"]; ok {
+				if fu, ok := u.(float64); ok {
+					uptime = int(fu)
+				}
+			}
+		}
+
+		size, mod := logFileInfo(name)
+		results = append(results, workerInfo{
+			Name:      name,
+			Type:      "local",
+			Port:      port,
+			Status:    statusData,
+			LogSize:   size,
+			LogMod:    mod,
+			UptimeSec: uptime,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
+
+	data, _ := json.Marshal(results)
+	return string(data)
+}
+
+// dispatchToWorker sends a task to a worker and returns the cleaned response.
+func dispatchToWorker(worker, instruction string) (string, error) {
+	return executeSwarmDispatch(fmt.Sprintf(`{"worker":%q,"instruction":%q}`, worker, instruction))
 }

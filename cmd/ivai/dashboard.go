@@ -110,6 +110,7 @@ const dashboardHTML = `<!DOCTYPE html>
     <button data-tab="memory">Memory</button>
     <button data-tab="tools">Tools</button>
     <button data-tab="system">System</button>
+    <button data-tab="swarm">Swarm</button>
   </nav>
   <div style="margin-left:auto;font-size:12px;color:var(--dim)" id="uptime"></div>
 </header>
@@ -149,6 +150,25 @@ const dashboardHTML = `<!DOCTYPE html>
     <div class="section-title">System Prompt</div>
     <div class="prompt-box" id="system-prompt">Loading...</div>
   </div>
+
+  <div id="tab-swarm" class="tab">
+    <div class="grid" id="swarm-worker-cards"></div>
+    <div id="swarm-worker-detail" style="display:none">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <button id="swarm-back-btn" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--radius);cursor:pointer;font-size:13px">&larr; Back</button>
+        <span class="section-title" style="margin:0">Worker: <span id="swarm-detail-name"></span></span>
+        <button id="swarm-refresh-log" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--radius);cursor:pointer;font-size:13px;margin-left:auto">&#8635; Refresh</button>
+      </div>
+      <div class="card"><div class="event-log" id="swarm-log-view" style="max-height:40vh">Loading logs...</div></div>
+    </div>
+    <div class="section-title" style="margin-top:16px">Dispatch Task</div>
+    <div class="console-input" style="margin-bottom:8px">
+      <input id="swarm-worker-input" placeholder="Worker (e.g. localhost:8081)" style="max-width:220px" />
+      <input id="swarm-instruction-input" placeholder="Enter instruction..." />
+      <button id="swarm-dispatch-btn" onclick="dispatchSwarmTask()">&#9654; Send</button>
+    </div>
+    <div id="swarm-dispatch-result" class="event-log" style="max-height:25vh;display:none"></div>
+  </div>
 </main>
 
 <script>
@@ -163,6 +183,7 @@ document.querySelectorAll('nav button').forEach(btn => {
     if (btn.dataset.tab === 'memory') loadMemory();
     if (btn.dataset.tab === 'tools') loadTools();
     if (btn.dataset.tab === 'system') loadSystem();
+    if (btn.dataset.tab === 'swarm') loadSwarmWorkers();
   });
 });
 
@@ -373,6 +394,90 @@ async function loadEmbeddings() {
 }
 
 loadStatus(); setInterval(loadStatus, 30000);
+
+// --- Swarm Tab ---
+let swarmRefresh = null;
+
+async function loadSwarmWorkers() {
+  try {
+    const workers = await fetch('/api/swarm/workers').then(r=>r.json());
+    if (!workers.length) {
+      document.getElementById('swarm-worker-cards').innerHTML = '<div class="card" style="grid-column:1/-1"><div class="empty-state" style="padding:20px">No workers running. Use <strong>swarm_spawn</strong> to start one.</div></div>';
+      return;
+    }
+    let html = '';
+    workers.forEach(w => {
+      const uptime = fmtDuration(w.uptime_sec || 0);
+      const logSize = w.log_size > 1024 ? (w.log_size/1024).toFixed(1)+' KB' : (w.log_size||0)+' B';
+      html += '<div class="card" style="cursor:pointer" onclick="showWorkerLog(\''+w.name+'\')">'+
+        '<h3>'+escHtml(w.name)+'</h3>'+
+        '<div class="value" style="font-size:16px">'+w.port+'</div>'+
+        '<div class="sub">'+uptime+' &middot; '+logSize+'</div>'+
+        '</div>';
+    });
+    document.getElementById('swarm-worker-cards').innerHTML = html;
+  } catch(e) { console.error(e); }
+}
+
+async function showWorkerLog(name) {
+  document.getElementById('swarm-worker-cards').style.display = 'none';
+  document.getElementById('swarm-worker-detail').style.display = 'block';
+  document.getElementById('swarm-detail-name').textContent = name;
+  document.getElementById('swarm-worker-input').value = 'localhost:' + (await getWorkerPort(name));
+  await refreshWorkerLog(name);
+  if (swarmRefresh) clearInterval(swarmRefresh);
+  swarmRefresh = setInterval(() => refreshWorkerLog(name), 3000);
+}
+
+async function getWorkerPort(name) {
+  try {
+    const workers = await fetch('/api/swarm/workers').then(r=>r.json());
+    const w = workers.find(x => x.name === name);
+    return w ? w.port : '8081';
+  } catch(e) { return '8081'; }
+}
+
+async function refreshWorkerLog(name) {
+  try {
+    const log = await fetch('/api/swarm/logs?worker='+encodeURIComponent(name)+'&lines=100').then(r=>r.text());
+    document.getElementById('swarm-log-view').innerHTML = '<pre style="margin:0;white-space:pre-wrap;font-size:11px;line-height:1.5">'+escHtml(log)+'</pre>';
+  } catch(e) { document.getElementById('swarm-log-view').innerHTML = '<div class="event event-error">Error loading logs: '+escHtml(e.message)+'</div>'; }
+}
+
+document.addEventListener('click', function(e) {
+  if (e.target.id === 'swarm-back-btn') {
+    document.getElementById('swarm-worker-cards').style.display = '';
+    document.getElementById('swarm-worker-detail').style.display = 'none';
+    if (swarmRefresh) { clearInterval(swarmRefresh); swarmRefresh = null; }
+  }
+  if (e.target.id === 'swarm-refresh-log') {
+    const name = document.getElementById('swarm-detail-name').textContent;
+    if (name) refreshWorkerLog(name);
+  }
+});
+
+async function dispatchSwarmTask() {
+  const worker = document.getElementById('swarm-worker-input').value.trim();
+  const instruction = document.getElementById('swarm-instruction-input').value.trim();
+  if (!worker || !instruction) return;
+  const resultDiv = document.getElementById('swarm-dispatch-result');
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<div class="event event-start"><span class="evt-type">[dispatching]</span> Sending to '+escHtml(worker)+'...</div>';
+  try {
+    const resp = await fetch('/api/swarm/dispatch', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({worker, instruction})
+    }).then(r=>r.json());
+    if (resp.error) {
+      resultDiv.innerHTML = '<div class="event event-error"><span class="evt-type">[error]</span>'+escHtml(resp.error)+'</div>';
+    } else {
+      resultDiv.innerHTML = '<div class="event event-complete"><pre style="margin:0;white-space:pre-wrap;font-size:11px">'+escHtml(resp.response||'')+'</pre></div>';
+    }
+  } catch(e) {
+    resultDiv.innerHTML = '<div class="event event-error"><span class="evt-type">[error]</span>'+escHtml(e.message)+'</div>';
+  }
+}
 </script>
 </body>
 </html>`

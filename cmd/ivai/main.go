@@ -207,6 +207,15 @@ func startHTTPServer(port string, taskChan chan<- taskWithResponder, gateway *ll
 	mux.HandleFunc("/api/embeddings", func(w http.ResponseWriter, r *http.Request) {
 		handleEmbeddings(w, r, dbStore)
 	})
+	mux.HandleFunc("/api/swarm/workers", func(w http.ResponseWriter, r *http.Request) {
+		handleSwarmWorkers(w, r)
+	})
+	mux.HandleFunc("/api/swarm/logs", func(w http.ResponseWriter, r *http.Request) {
+		handleSwarmLogs(w, r)
+	})
+	mux.HandleFunc("/api/swarm/dispatch", func(w http.ResponseWriter, r *http.Request) {
+		handleSwarmDispatch(w, r)
+	})
 
 	// Serve embedded web dashboard
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -495,5 +504,50 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request, dbStore *memory.St
 		results = []memory.EmbeddingResult{}
 	}
 	json.NewEncoder(w).Encode(map[string]any{"embeddings": results})
+}
+
+// --- Swarm Observability API Handlers ---
+
+func handleSwarmWorkers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(listWorkersWithMeta()))
+}
+
+func handleSwarmLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	name := r.URL.Query().Get("worker")
+	if name == "" {
+		http.Error(w, "missing worker parameter", http.StatusBadRequest)
+		return
+	}
+	lines := parseQueryInt(r.URL.Query().Get("lines"), 50, func(v int) bool { return v > 0 && v <= 2000 })
+	logData := readWorkerLog(name, lines)
+	w.Write([]byte(logData))
+}
+
+func handleSwarmDispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	var req struct {
+		Worker      string `json:"worker"`
+		Instruction string `json:"instruction"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if req.Worker == "" || req.Instruction == "" {
+		json.NewEncoder(w).Encode(map[string]string{"error": "worker and instruction are required"})
+		return
+	}
+	result, err := dispatchToWorker(req.Worker, req.Instruction)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"response": result})
 }
 

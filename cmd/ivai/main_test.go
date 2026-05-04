@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -772,3 +773,396 @@ func TestListLocalWorkersFindsActiveWorkers(t *testing.T) {
 		t.Errorf("listLocalWorkers result missing type field: %s", result)
 	}
 }
+
+func TestListWorkersWithMetaEmpty(t *testing.T) {
+	result := listWorkersWithMeta()
+	if result != "[]" {
+		var workers []any
+		if err := json.Unmarshal([]byte(result), &workers); err != nil {
+			t.Errorf("listWorkersWithMeta returned invalid JSON: %v", err)
+		}
+	}
+}
+
+func TestReadWorkerLog(t *testing.T) {
+	name := "testreadlog"
+	logPath := "/tmp/ivai-" + name + ".log"
+	lines := []string{"line1", "line2", "line3", "line4", "line5"}
+	os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	defer os.Remove(logPath)
+
+	result := readWorkerLog(name, 0)
+	if result != "line1\nline2\nline3\nline4\nline5" {
+		t.Errorf("readWorkerLog all = %q", result)
+	}
+
+	result = readWorkerLog(name, 2)
+	if result != "line4\nline5" {
+		t.Errorf("readWorkerLog last 2 = %q", result)
+	}
+
+	result = readWorkerLog(name, 100)
+	if !strings.Contains(result, "line1") {
+		t.Errorf("readWorkerLog overflow should return all lines, got %q", result)
+	}
+
+	result = readWorkerLog("nonexistent99", 10)
+	if !strings.Contains(result, "Error:") {
+		t.Errorf("readWorkerLog nonexistent should return error, got %q", result)
+	}
+}
+
+func TestLogFileInfo(t *testing.T) {
+	name := "testloginfo"
+	logPath := "/tmp/ivai-" + name + ".log"
+	content := []byte("hello world\n")
+	os.WriteFile(logPath, content, 0644)
+	defer os.Remove(logPath)
+
+	size, mod := logFileInfo(name)
+	if size != int64(len(content)) {
+		t.Errorf("logFileInfo size = %d, want %d", size, len(content))
+	}
+	if mod == "" {
+		t.Error("logFileInfo modTime should not be empty")
+	}
+
+	size, mod = logFileInfo("nonexistent99")
+	if size != 0 || mod != "" {
+		t.Errorf("logFileInfo nonexistent should return 0,'', got %d,%q", size, mod)
+	}
+}
+
+func TestDispatchToWorker(t *testing.T) {
+	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"response":"task done"}`))
+	}))
+	defer mockWorker.Close()
+
+	addr := mockWorker.URL[strings.Index(mockWorker.URL, "://")+3:]
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+
+	result, err := dispatchToWorker(addr, "test instruction")
+	if err != nil {
+		t.Fatalf("dispatchToWorker failed: %v", err)
+	}
+	if !strings.Contains(result, "task done") {
+		t.Errorf("dispatchToWorker result missing expected text: %s", result)
+	}
+}
+
+func TestHandleSwarmWorkers(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/swarm/workers", nil)
+	rec := httptest.NewRecorder()
+	handleSwarmWorkers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("expected JSON, got %s", ct)
+	}
+	var workers []any
+	if err := json.Unmarshal(rec.Body.Bytes(), &workers); err != nil {
+		t.Errorf("invalid JSON: %v", err)
+	}
+}
+
+func TestHandleSwarmLogs(t *testing.T) {
+	name := "testswarmlogshdl"
+	logPath := "/tmp/ivai-" + name + ".log"
+	os.WriteFile(logPath, []byte("log line 1\nlog line 2\n"), 0644)
+	defer os.Remove(logPath)
+
+	req := httptest.NewRequest("GET", "/api/swarm/logs?worker="+name+"&lines=1", nil)
+	rec := httptest.NewRecorder()
+	handleSwarmLogs(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "log line 2") {
+		t.Errorf("expected 'log line 2', got %s", rec.Body.String())
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/swarm/logs", nil)
+	rec2 := httptest.NewRecorder()
+	handleSwarmLogs(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing worker, got %d", rec2.Code)
+	}
+}
+
+func TestHandleSwarmDispatch(t *testing.T) {
+	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"response":"from worker"}`))
+	}))
+	defer mockWorker.Close()
+
+	addr := mockWorker.URL[strings.Index(mockWorker.URL, "://")+3:]
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+
+	body := fmt.Sprintf(`{"worker":%q,"instruction":"do something"}`, addr)
+	req := httptest.NewRequest("POST", "/api/swarm/dispatch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handleSwarmDispatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["response"], "from worker") {
+		t.Errorf("expected response containing 'from worker', got %q", resp["response"])
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/swarm/dispatch", nil)
+	rec2 := httptest.NewRecorder()
+	handleSwarmDispatch(rec2, req2)
+	if rec2.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET, got %d", rec2.Code)
+	}
+
+	req3 := httptest.NewRequest("POST", "/api/swarm/dispatch", strings.NewReader(`{}`))
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	handleSwarmDispatch(rec3, req3)
+	var resp3 map[string]string
+	json.Unmarshal(rec3.Body.Bytes(), &resp3)
+	if resp3["error"] == "" {
+		t.Error("expected error for empty fields")
+	}
+
+	// Invalid JSON body
+	req4 := httptest.NewRequest("POST", "/api/swarm/dispatch", strings.NewReader(`not json`))
+	req4.Header.Set("Content-Type", "application/json")
+	rec4 := httptest.NewRecorder()
+	handleSwarmDispatch(rec4, req4)
+	var resp4 map[string]string
+	json.Unmarshal(rec4.Body.Bytes(), &resp4)
+	if resp4["error"] == "" {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestResolveWorkerURLWithProtocol(t *testing.T) {
+	tests := []struct{ input, path, want string }{
+		{"http://worker:8080", "/api/task", "http://worker:8080/api/task"},
+		{"https://worker:443", "/api/status", "https://worker:443/api/status"},
+		{"localhost", "/test", "http://localhost:8080/test"},
+		{"localhost:8081", "/test", "http://localhost:8081/test"},
+	}
+	for _, tc := range tests {
+		got := resolveWorkerURL(tc.input, tc.path)
+		if got != tc.want {
+			t.Errorf("resolveWorkerURL(%q, %q) = %q, want %q", tc.input, tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestHandleTaskResultsNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/task-results", nil)
+	rec := httptest.NewRecorder()
+	handleTaskResults(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Error("expected error for nil dbStore")
+	}
+}
+
+func TestHandleEmbeddingsNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/embeddings", nil)
+	rec := httptest.NewRecorder()
+	handleEmbeddings(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Error("expected error for nil dbStore")
+	}
+}
+
+func TestHandleMemoryNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/memory", nil)
+	rec := httptest.NewRecorder()
+	handleMemory(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Error("expected error for nil dbStore")
+	}
+}
+
+func TestHandleSystemNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/system", nil)
+	rec := httptest.NewRecorder()
+	handleSystem(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if _, ok := resp["embeddings_count"]; !ok {
+		t.Error("expected embeddings_count in response")
+	}
+}
+
+func TestHandleTaskBlockingInvalidJSON(t *testing.T) {
+	req := httptest.NewRequest("POST", "/api/task", strings.NewReader(`not json`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handleTaskBlocking(rec, req, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestShowThinkingNonTTY(t *testing.T) {
+	showThinking("")
+	showThinking("test reasoning")
+}
+
+func TestExecuteSwarmSpawnMissingBinary(t *testing.T) {
+	name := "testspawnfail"
+	os.RemoveAll("/tmp/ivai-" + name)
+	defer os.RemoveAll("/tmp/ivai-" + name)
+	result, err := executeSwarmSpawn(`{"name":"testspawnfail","port":"9099"}`)
+	if err != nil {
+		t.Logf("executeSwarmSpawn error: %v", err)
+	} else {
+		t.Logf("executeSwarmSpawn result: %s", result)
+	}
+}
+
+func TestResolvePathsWithDataDir(t *testing.T) {
+	t.Setenv("IVAI_DATA_DIR", "/custom/data")
+	env, db := resolvePaths()
+	if env != "/custom/data/.env" {
+		t.Errorf("expected /custom/data/.env, got %s", env)
+	}
+	if db != "/custom/data/memory.db" {
+		t.Errorf("expected /custom/data/memory.db, got %s", db)
+	}
+}
+
+func TestResolvePathsDefault(t *testing.T) {
+	t.Setenv("IVAI_DATA_DIR", "")
+	env, db := resolvePaths()
+	if env == "" || db == "" {
+		t.Error("expected non-empty paths")
+	}
+}
+
+func TestLocalWorkerPortMissingEnv(t *testing.T) {
+	// No .env file should return empty
+	port := localWorkerPort("nonexistent99")
+	if port != "" {
+		t.Errorf("expected empty, got %q", port)
+	}
+}
+
+func TestHandleWasmMissingFile(t *testing.T) {
+	wasm := sandbox.NewWasmRuntime()
+	result, err := handleWasm(nil, `{"filepath":"/tmp/nonexistent.wasm","payload":"","timeout_ms":100}`, wasm)
+	if err != nil {
+		t.Logf("handleWasm error: %v", err)
+	}
+	if result == "" {
+		t.Error("expected non-empty result even on error")
+	}
+}
+
+func TestExecuteSwarmSpawnMkdirError(t *testing.T) {
+	// Make /tmp/ivai-testmkdira a file so MkdirAll fails
+	os.RemoveAll("/tmp/ivai-testmkdira")
+	os.WriteFile("/tmp/ivai-testmkdira", []byte("not a dir"), 0644)
+	defer os.RemoveAll("/tmp/ivai-testmkdira")
+
+	result, err := executeSwarmSpawn(`{"name":"testmkdira","port":"9098"}`)
+	if err == nil {
+		t.Error("expected error for mkdir failure")
+	} else {
+		t.Logf("executeSwarmSpawn mkdir error: %v", err)
+	}
+	_ = result
+}
+
+func TestExecuteSwarmSpawnEnvWriteError(t *testing.T) {
+	// Create a dir and make .env a pre-existing dir so WriteFile fails
+	os.RemoveAll("/tmp/ivai-testenvfail")
+	os.MkdirAll("/tmp/ivai-testenvfail", 0700)
+	os.MkdirAll("/tmp/ivai-testenvfail/.env", 0700)
+	defer os.RemoveAll("/tmp/ivai-testenvfail")
+
+	result, err := executeSwarmSpawn(`{"name":"testenvfail","port":"9097"}`)
+	if err == nil {
+		t.Error("expected error for .env write failure")
+	} else {
+		t.Logf("executeSwarmSpawn env write error: %v", err)
+	}
+	_ = result
+}
+
+func TestParseQueryIntEdgeCases(t *testing.T) {
+	tests := []struct {
+		input string
+		def   int
+		want  int
+	}{
+		{"", 10, 10},
+		{"invalid", 10, 10},
+		{"-1", 10, 10},
+		{"0", 10, 10},
+		{"5", 5, 5},
+		{"100", 5, 5},
+	}
+	for _, tc := range tests {
+		got := parseQueryInt(tc.input, tc.def, func(v int) bool { return v > 0 && v <= 20 })
+		if got != tc.want {
+			t.Errorf("parseQueryInt(%q, %d) = %d, want %d", tc.input, tc.def, got, tc.want)
+		}
+	}
+}
+
+func TestHttpServerSwarmRoutes(t *testing.T) {
+	gw := llm.NewGateway("key", "", "")
+	taskChan := make(chan taskWithResponder, 10)
+	server := startHTTPServer("0", taskChan, gw, nil)
+
+	ts := httptest.NewServer(server.Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/swarm/workers")
+	if err != nil {
+		t.Fatalf("GET /api/swarm/workers failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	resp2, _ := http.Get(ts.URL + "/api/swarm/dispatch")
+	if resp2 != nil {
+		defer resp2.Body.Close()
+		if resp2.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for GET dispatch, got %d", resp2.StatusCode)
+		}
+	}
+}
+
