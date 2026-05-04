@@ -1119,3 +1119,50 @@ func TestExecuteSwarmSpawnEnvWriteError(t *testing.T) {
 	_ = result
 }
 
+func TestParseQueryIntEdgeCases(t *testing.T) {
+	tests := []struct {
+		input string
+		def   int
+		want  int
+	}{
+		{"", 10, 10},
+		{"invalid", 10, 10},
+		{"-1", 10, 10},
+		{"0", 10, 10},
+		{"5", 5, 5},
+		{"100", 5, 5},
+	}
+	for _, tc := range tests {
+		got := parseQueryInt(tc.input, tc.def, func(v int) bool { return v > 0 && v <= 20 })
+		if got != tc.want {
+			t.Errorf("parseQueryInt(%q, %d) = %d, want %d", tc.input, tc.def, got, tc.want)
+		}
+	}
+}
+
+func TestHttpServerSwarmRoutes(t *testing.T) {
+	gw := llm.NewGateway("key", "", "")
+	taskChan := make(chan taskWithResponder, 10)
+	server := startHTTPServer("0", taskChan, gw, nil)
+
+	ts := httptest.NewServer(server.Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/swarm/workers")
+	if err != nil {
+		t.Fatalf("GET /api/swarm/workers failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	resp2, _ := http.Get(ts.URL + "/api/swarm/dispatch")
+	if resp2 != nil {
+		defer resp2.Body.Close()
+		if resp2.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for GET dispatch, got %d", resp2.StatusCode)
+		}
+	}
+}
+
