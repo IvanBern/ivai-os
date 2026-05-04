@@ -32,6 +32,7 @@ jobs:
           echo "IVAI_PORT=8082" > /tmp/ivai-e2e-worker/.env
           cp ./ivai-os /tmp/ivai-e2e-worker/ivai-os
           chmod +x /tmp/ivai-e2e-worker/ivai-os
+          IVAI_DATA_DIR=/tmp/ivai-e2e-worker IVAI_PORT=8082 /tmp/ivai-e2e-worker/ivai-os > /tmp/ivai-e2e-worker.log 2>&1 &
           IVAI_DATA_DIR=/tmp/ivai-e2e-worker IVAI_PORT=8082 /tmp/ivai-e2e-worker/ivai-os &
           sleep 3
           curl -s http://localhost:8082/api/status | head -c 100
