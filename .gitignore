@@ -8,9 +8,13 @@
 /ivai.service
 *.exe
 *.log
+*.out
 /test-results/
 .DS_Store
 ivai-local
 memory.db
+cmd/ivai/f
+.crush
 ivaictl-linux
-coverage.out
+test/e2e/node_modules/
+test/e2e/package-lock.json

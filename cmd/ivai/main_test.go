@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -770,5 +771,172 @@ func TestListLocalWorkersFindsActiveWorkers(t *testing.T) {
 	}
 	if !strings.Contains(result, `"type":"local"`) {
 		t.Errorf("listLocalWorkers result missing type field: %s", result)
+	}
+}
+
+func TestListWorkersWithMetaEmpty(t *testing.T) {
+	result := listWorkersWithMeta()
+	if result != "[]" {
+		var workers []any
+		if err := json.Unmarshal([]byte(result), &workers); err != nil {
+			t.Errorf("listWorkersWithMeta returned invalid JSON: %v", err)
+		}
+	}
+}
+
+func TestReadWorkerLog(t *testing.T) {
+	name := "testreadlog"
+	logPath := "/tmp/ivai-" + name + ".log"
+	lines := []string{"line1", "line2", "line3", "line4", "line5"}
+	os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	defer os.Remove(logPath)
+
+	result := readWorkerLog(name, 0)
+	if result != "line1\nline2\nline3\nline4\nline5" {
+		t.Errorf("readWorkerLog all = %q", result)
+	}
+
+	result = readWorkerLog(name, 2)
+	if result != "line4\nline5" {
+		t.Errorf("readWorkerLog last 2 = %q", result)
+	}
+
+	result = readWorkerLog(name, 100)
+	if !strings.Contains(result, "line1") {
+		t.Errorf("readWorkerLog overflow should return all lines, got %q", result)
+	}
+
+	result = readWorkerLog("nonexistent99", 10)
+	if !strings.Contains(result, "Error:") {
+		t.Errorf("readWorkerLog nonexistent should return error, got %q", result)
+	}
+}
+
+func TestLogFileInfo(t *testing.T) {
+	name := "testloginfo"
+	logPath := "/tmp/ivai-" + name + ".log"
+	content := []byte("hello world\n")
+	os.WriteFile(logPath, content, 0644)
+	defer os.Remove(logPath)
+
+	size, mod := logFileInfo(name)
+	if size != int64(len(content)) {
+		t.Errorf("logFileInfo size = %d, want %d", size, len(content))
+	}
+	if mod == "" {
+		t.Error("logFileInfo modTime should not be empty")
+	}
+
+	size, mod = logFileInfo("nonexistent99")
+	if size != 0 || mod != "" {
+		t.Errorf("logFileInfo nonexistent should return 0,'', got %d,%q", size, mod)
+	}
+}
+
+func TestDispatchToWorker(t *testing.T) {
+	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"response":"task done"}`))
+	}))
+	defer mockWorker.Close()
+
+	addr := mockWorker.URL[strings.Index(mockWorker.URL, "://")+3:]
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+
+	result, err := dispatchToWorker(addr, "test instruction")
+	if err != nil {
+		t.Fatalf("dispatchToWorker failed: %v", err)
+	}
+	if !strings.Contains(result, "task done") {
+		t.Errorf("dispatchToWorker result missing expected text: %s", result)
+	}
+}
+
+func TestHandleSwarmWorkers(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/swarm/workers", nil)
+	rec := httptest.NewRecorder()
+	handleSwarmWorkers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("expected JSON, got %s", ct)
+	}
+	var workers []any
+	if err := json.Unmarshal(rec.Body.Bytes(), &workers); err != nil {
+		t.Errorf("invalid JSON: %v", err)
+	}
+}
+
+func TestHandleSwarmLogs(t *testing.T) {
+	name := "testswarmlogshdl"
+	logPath := "/tmp/ivai-" + name + ".log"
+	os.WriteFile(logPath, []byte("log line 1\nlog line 2\n"), 0644)
+	defer os.Remove(logPath)
+
+	req := httptest.NewRequest("GET", "/api/swarm/logs?worker="+name+"&lines=1", nil)
+	rec := httptest.NewRecorder()
+	handleSwarmLogs(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "log line 2") {
+		t.Errorf("expected 'log line 2', got %s", rec.Body.String())
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/swarm/logs", nil)
+	rec2 := httptest.NewRecorder()
+	handleSwarmLogs(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing worker, got %d", rec2.Code)
+	}
+}
+
+func TestHandleSwarmDispatch(t *testing.T) {
+	mockWorker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"response":"from worker"}`))
+	}))
+	defer mockWorker.Close()
+
+	addr := mockWorker.URL[strings.Index(mockWorker.URL, "://")+3:]
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+
+	body := fmt.Sprintf(`{"worker":%q,"instruction":"do something"}`, addr)
+	req := httptest.NewRequest("POST", "/api/swarm/dispatch", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handleSwarmDispatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["response"], "from worker") {
+		t.Errorf("expected response containing 'from worker', got %q", resp["response"])
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/swarm/dispatch", nil)
+	rec2 := httptest.NewRecorder()
+	handleSwarmDispatch(rec2, req2)
+	if rec2.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET, got %d", rec2.Code)
+	}
+
+	req3 := httptest.NewRequest("POST", "/api/swarm/dispatch", strings.NewReader(`{}`))
+	req3.Header.Set("Content-Type", "application/json")
+	rec3 := httptest.NewRecorder()
+	handleSwarmDispatch(rec3, req3)
+	var resp3 map[string]string
+	json.Unmarshal(rec3.Body.Bytes(), &resp3)
+	if resp3["error"] == "" {
+		t.Error("expected error for empty fields")
 	}
 }

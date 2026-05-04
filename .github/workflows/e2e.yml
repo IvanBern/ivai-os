@@ -21,11 +21,20 @@ jobs:
       - name: Build Ivai
         run: go build -o ivai-os ./cmd/ivai/
 
-      - name: Start Ivai
+      - name: Start Ivai + spawn worker
         run: |
           IVAI_DATA_DIR=/tmp IVAI_PORT=8099 ./ivai-os &
           sleep 3
-          curl -s http://localhost:8099/api/status
+          curl -s http://localhost:8099/api/status | head -c 100
+          echo ""
+          # Spawn a local worker for Swarm E2E tests
+          mkdir -p /tmp/ivai-e2e-worker
+          echo "IVAI_PORT=8082" > /tmp/ivai-e2e-worker/.env
+          cp ./ivai-os /tmp/ivai-e2e-worker/ivai-os
+          IVAI_DATA_DIR=/tmp/ivai-e2e-worker IVAI_PORT=8082 /tmp/ivai-e2e-worker/ivai-os &
+          sleep 3
+          curl -s http://localhost:8082/api/status | head -c 100
+          echo ""
 
       - uses: actions/setup-node@v4
         with:
@@ -35,48 +44,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('test/e2e/package.json') }}
 
       - name: Install Playwright
+        working-directory: test/e2e
         run: |
-          npm init -y --silent
-          npm install playwright --silent
+          npm install --silent
           npx playwright install chromium
 
-      - name: E2E Dashboard Test
+      - name: E2E Swarm Dashboard Test
+        working-directory: test/e2e
         run: |
-          node -e "
-          const { chromium } = require('playwright');
-          (async () => {
-            const page = await (await chromium.launch()).newPage();
-            page.on('pageerror', e => { console.error('JS ERROR:', e.message); process.exit(1); });
-            await page.setViewportSize({ width: 1440, height: 900 });
-            await page.goto('http://localhost:8099', { waitUntil: 'networkidle', timeout: 10000 });
-            await page.waitForTimeout(2000);
-            for (const tab of ['dashboard','console','results','memory','tools','system'])
-              await page.locator('nav button[data-tab=\"'+tab+'\"]').waitFor({state:'visible',timeout:3000});
-            console.log('✅ 6 tabs');
-            await page.locator('nav button[data-tab=\"tools\"]').click();
-            await page.waitForTimeout(2000);
-            const tools = await page.locator('#tools-list .tool-card').count();
-            if (tools < 7) throw new Error('Expected >=7 tools, got '+tools);
-            console.log('✅ '+tools+' tools');
-            await page.locator('nav button[data-tab=\"console\"]').click();
-            await page.locator('#instruction').fill('say hello');
-            await page.locator('#send-btn').click();
-            await page.waitForTimeout(8000);
-            await page.locator('nav button[data-tab=\"results\"]').click();
-            await page.waitForTimeout(2000);
-            const rows = await page.locator('#results-body tr').count();
-            if (rows < 1) throw new Error('Task not tracked');
-            console.log('✅ Task tracked: '+rows+' rows');
-            await page.screenshot({ path: 'e2e-screenshot.png' });
-            console.log('🎉 All E2E passed');
-            process.exit(0);
-          })();
-          "
+          BASE_URL=http://localhost:8099 HEADLESS=true node swarm-dashboard.mjs
 
       - name: Upload screenshot
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-screenshot
