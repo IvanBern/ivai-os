@@ -218,61 +218,79 @@ func readWorkerLog(name string, lines int) string {
 	return strings.Join(allLines[len(allLines)-lines:], "\n")
 }
 
+type workerInfo struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Port      string `json:"port"`
+	Status    any    `json:"status"`
+	LogSize   int64  `json:"log_size"`
+	LogMod    string `json:"log_modified"`
+	UptimeSec int    `json:"uptime_sec"`
+}
+
+// collectWorkerData builds a workerInfo from a discovered worker name.
+func collectWorkerData(name string) *workerInfo {
+	port := localWorkerPort(name)
+	statusRaw := checkLocalWorker(name)
+	if statusRaw == "" {
+		return nil
+	}
+	size, mod := logFileInfo(name)
+	return &workerInfo{
+		Name:      name,
+		Type:      "local",
+		Port:      port,
+		Status:    parseStatus(statusRaw),
+		LogSize:   size,
+		LogMod:    mod,
+		UptimeSec: extractUptimeSec(statusRaw),
+	}
+}
+
+// parseStatus unmarshals a JSON status string into a map.
+func parseStatus(raw string) any {
+	var data map[string]any
+	json.Unmarshal([]byte(raw), &data)
+	return data
+}
+
+// extractUptimeSec reads the uptime_sec field from a raw status JSON string.
+func extractUptimeSec(raw string) int {
+	var data map[string]any
+	if json.Unmarshal([]byte(raw), &data) != nil {
+		return 0
+	}
+	u, ok := data["uptime_sec"]
+	if !ok {
+		return 0
+	}
+	fu, ok := u.(float64)
+	if !ok {
+		return 0
+	}
+	return int(fu)
+}
+
 // listWorkersWithMeta returns a JSON array of local workers with log metadata.
 func listWorkersWithMeta() string {
 	entries, err := os.ReadDir("/tmp")
 	if err != nil {
 		return "[]"
 	}
-
-	type workerInfo struct {
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		Port      string `json:"port"`
-		Status    any    `json:"status"`
-		LogSize   int64  `json:"log_size"`
-		LogMod    string `json:"log_modified"`
-		UptimeSec int    `json:"uptime_sec"`
-	}
-
 	results := make([]workerInfo, 0)
 	for _, e := range entries {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), "ivai-") {
 			continue
 		}
-		name := strings.TrimPrefix(e.Name(), "ivai-")
-		port := localWorkerPort(name)
-		statusRaw := checkLocalWorker(name)
-		if statusRaw == "" {
+		w := collectWorkerData(strings.TrimPrefix(e.Name(), "ivai-"))
+		if w == nil {
 			continue
 		}
-
-		uptime := 0
-		var statusData map[string]any
-		if json.Unmarshal([]byte(statusRaw), &statusData) == nil {
-			if u, ok := statusData["uptime_sec"]; ok {
-				if fu, ok := u.(float64); ok {
-					uptime = int(fu)
-				}
-			}
-		}
-
-		size, mod := logFileInfo(name)
-		results = append(results, workerInfo{
-			Name:      name,
-			Type:      "local",
-			Port:      port,
-			Status:    statusData,
-			LogSize:   size,
-			LogMod:    mod,
-			UptimeSec: uptime,
-		})
+		results = append(results, *w)
 	}
-
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Name < results[j].Name
 	})
-
 	data, _ := json.Marshal(results)
 	return string(data)
 }
