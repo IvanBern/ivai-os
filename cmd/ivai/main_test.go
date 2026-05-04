@@ -939,4 +939,58 @@ func TestHandleSwarmDispatch(t *testing.T) {
 	if resp3["error"] == "" {
 		t.Error("expected error for empty fields")
 	}
+
+	// Invalid JSON body
+	req4 := httptest.NewRequest("POST", "/api/swarm/dispatch", strings.NewReader(`not json`))
+	req4.Header.Set("Content-Type", "application/json")
+	rec4 := httptest.NewRecorder()
+	handleSwarmDispatch(rec4, req4)
+	var resp4 map[string]string
+	json.Unmarshal(rec4.Body.Bytes(), &resp4)
+	if resp4["error"] == "" {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestResolveWorkerURLWithProtocol(t *testing.T) {
+	tests := []struct{ input, path, want string }{
+		{"http://worker:8080", "/api/task", "http://worker:8080/api/task"},
+		{"https://worker:443", "/api/status", "https://worker:443/api/status"},
+		{"localhost", "/test", "http://localhost:8080/test"},
+		{"localhost:8081", "/test", "http://localhost:8081/test"},
+	}
+	for _, tc := range tests {
+		got := resolveWorkerURL(tc.input, tc.path)
+		if got != tc.want {
+			t.Errorf("resolveWorkerURL(%q, %q) = %q, want %q", tc.input, tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestHandleTaskResultsNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/task-results", nil)
+	rec := httptest.NewRecorder()
+	handleTaskResults(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Error("expected error for nil dbStore")
+	}
+}
+
+func TestHandleEmbeddingsNilDB(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/embeddings", nil)
+	rec := httptest.NewRecorder()
+	handleEmbeddings(rec, req, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Error("expected error for nil dbStore")
+	}
 }
