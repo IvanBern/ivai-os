@@ -3,6 +3,8 @@ package telemetry
 import (
 	"context"
 	"testing"
+
+	"go.opentelemetry.io/otel"
 )
 
 func TestInitTracer(t *testing.T) {
@@ -39,5 +41,9 @@ func TestInitTracerWithCanceledContext(t *testing.T) {
 	_, err := InitTracer("test-canceled")
 	if err != nil {
 		t.Logf("InitTracer with issues returned error: %v", err)
+	}
+	// Verify trace provider is set globally after InitTracer
+	if otel.GetTracerProvider() == nil {
+		t.Error("expected non-nil global tracer provider")
 	}
 }

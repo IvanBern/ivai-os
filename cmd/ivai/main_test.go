@@ -1049,3 +1049,42 @@ func TestExecuteSwarmSpawnMissingBinary(t *testing.T) {
 		t.Logf("executeSwarmSpawn result: %s", result)
 	}
 }
+
+func TestResolvePathsWithDataDir(t *testing.T) {
+	t.Setenv("IVAI_DATA_DIR", "/custom/data")
+	env, db := resolvePaths()
+	if env != "/custom/data/.env" {
+		t.Errorf("expected /custom/data/.env, got %s", env)
+	}
+	if db != "/custom/data/memory.db" {
+		t.Errorf("expected /custom/data/memory.db, got %s", db)
+	}
+}
+
+func TestResolvePathsDefault(t *testing.T) {
+	t.Setenv("IVAI_DATA_DIR", "")
+	env, db := resolvePaths()
+	if env == "" || db == "" {
+		t.Error("expected non-empty paths")
+	}
+}
+
+func TestLocalWorkerPortMissingEnv(t *testing.T) {
+	// No .env file should return empty
+	port := localWorkerPort("nonexistent99")
+	if port != "" {
+		t.Errorf("expected empty, got %q", port)
+	}
+}
+
+func TestHandleWasmMissingFile(t *testing.T) {
+	wasm := sandbox.NewWasmRuntime()
+	result, err := handleWasm(nil, `{"filepath":"/tmp/nonexistent.wasm","payload":"","timeout_ms":100}`, wasm)
+	if err != nil {
+		t.Logf("handleWasm error: %v", err)
+	}
+	if result == "" {
+		t.Error("expected non-empty result even on error")
+	}
+}
+
